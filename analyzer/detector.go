@@ -151,6 +151,7 @@ func (d *Detector) ReadContent(path string, maxLines int) (string, error) {
 
 	var builder strings.Builder
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024) // allow large lines
 	lineCount := 0
 
 	for scanner.Scan() {
@@ -181,6 +182,7 @@ func (d *Detector) CountLines(path string) (int, error) {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 	lineCount := 0
 
 	for scanner.Scan() {

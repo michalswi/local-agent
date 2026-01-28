@@ -1,276 +1,260 @@
-# Local Agent - File Verification Tool
+# Local Agent - AI-powered code analysis tool
 
-A local agent tool written in Go that verifies and analyzes files on a user's laptop using LLM APIs (Ollama/Claude/Codex-style).
+![](https://img.shields.io/github/stars/michalswi/local-agent)
+![](https://img.shields.io/github/last-commit/michalswi/local-agent)
+![](https://img.shields.io/github/forks/michalswi/local-agent)
+![](https://img.shields.io/github/issues/michalswi/local-agent)
 
-## High-Level Architecture
+Scan, analyze files, and chat with your codebase using local LLMs
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         CLI Interface                        │
-│                         (main.go)                           │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Agent Orchestrator                       │
-│  - Coordinates file scanning, filtering, and LLM calls      │
-│  - Maintains local state (never sent to LLM)                │
-└──┬──────────────┬─────────────────┬────────────────────┬───┘
-   │              │                 │                    │
-   ▼              ▼                 ▼                    ▼
-┌──────┐   ┌──────────┐   ┌─────────────┐   ┌────────────────┐
-│ File │   │  Filter  │   │   Analyzer  │   │   LLM Client   │
-│ Walk │   │  Engine  │   │   Engine    │   │   (Ollama)     │
-└──────┘   └──────────┘   └─────────────┘   └────────────────┘
-   │              │                 │                    │
-   │              │                 │                    │
-   ▼              ▼                 ▼                    ▼
-┌──────┐   ┌──────────┐   ┌─────────────┐   ┌────────────────┐
-│ Dir  │   │ Rules    │   │ Chunker     │   │ HTTP Client    │
-│ Tree │   │ .ignore  │   │ Token Count │   │ JSON Protocol  │
-└──────┘   └──────────┘   └─────────────┘   └────────────────┘
-```
+## ✨ Features
 
-## Package Structure
+- 🔍 **Smart File Scanning** - Respects .gitignore, detects file types, handles large codebases
+- 🤖 **LLM Analysis** - Works with Ollama (local) or cloud LLMs for code analysis
+- 💬 **Interactive Mode** - Chat with your codebase using a beautiful TUI
+- 🔒 **Privacy First** - All scanning happens locally, you control what's sent to LLM
+- 📊 **Token Management** - Automatic batching for large projects
+- 💾 **Auto-Save Results** - Analysis saved to temp file for easy review
 
-```
-local-agent/
-├── main.go                    # Entry point, CLI handling
-├── go.mod                     # Go module definition
-├── go.sum                     # Dependency checksums
-├── config/
-│   ├── config.go             # Configuration loading/management
-│   └── rules.go              # Allowlist/denylist rule definitions
-├── filter/
-│   ├── filter.go             # File filtering logic
-│   ├── ignore.go             # .gitignore-style parsing
-│   └── matcher.go            # Pattern matching
-├── analyzer/
-│   ├── analyzer.go           # File analysis orchestration
-│   ├── detector.go           # File type/size detection
-│   ├── chunker.go            # Content chunking for large files
-│   └── summarizer.go         # Summary generation logic
-├── llm/
-│   ├── client.go             # LLM client interface
-│   ├── ollama.go             # Ollama-specific implementation
-│   ├── types.go              # Request/response types
-│   └── tokenizer.go          # Token counting utilities
-├── types/
-│   └── types.go              # Shared types and constants
-├── security/
-│   ├── validator.go          # Path and content validation
-│   └── sanitizer.go          # Content sanitization
-└── examples/
-    ├── .agentignore          # Example ignore rules
-    └── config.yaml           # Example configuration
+
+## 🚀 Quick Start
+
+```bash
+# Build
+go build -o local-agent
+
+# Analyze a directory
+./local-agent -dir ./myproject -task "find security issues"
+
+# Interactive mode
+./local-agent -dir ./myproject --interactive
+
+# View last analysis
+./local-agent --view-last
 ```
 
-## Key Design Principles
+## 📋 Usage
 
-### 1. **Privacy First**
-- All file scanning and filtering happens locally
-- Only explicitly selected content is sent to LLM
-- No automatic file uploads or background syncing
-- User approval required for directory traversal
+### Standard Analysis
+```bash
+# Basic analysis
+./local-agent -dir /path/to/code -task "your task here"
 
-### 2. **Stateless LLM Interaction**
-- LLM receives only sanitized, approved content
-- All context and state managed locally
-- Each LLM call is independent
-- Local cache for repeat queries (optional)
+# Examples:
+./local-agent -dir . -task "find all TODO comments"
+./local-agent -dir ./src -task "list security vulnerabilities"
+./local-agent -dir . -task "explain the architecture"
 
-### 3. **Intelligent Content Selection**
-- Small files (<10KB): send full content
-- Medium files (10KB-100KB): send with chunking option
-- Large files (>100KB): generate summary + selectable chunks
-- Binary files: metadata only
+# Use different model
+./local-agent -dir . -task "code review" --model codellama
 
-### 4. **Security Safeguards**
-- Path traversal prevention
-- Allowlist/denylist enforcement
-- Sensitive file detection (.env, secrets, keys)
-- Configurable file size limits
-- Content sanitization before LLM calls
-
-## Example Flow: "Verify This Folder"
-
-```
-1. User Input:
-   $ local-agent verify /path/to/project --task "check for security issues"
-
-2. Configuration Load:
-   - Load .agentignore rules (deny: node_modules, .git, *.log)
-   - Load allowlist rules (allow: *.go, *.js, *.md)
-   - Set token limit (default: 8000 tokens)
-
-3. Directory Traversal:
-   - Walk directory tree
-   - Apply filter rules at each level
-   - Detect file types and sizes
-   - Build file inventory (stored locally)
-
-4. File Analysis:
-   For each file:
-   - Check size: 2KB → small, send full content
-   - Check type: .go → text, proceed
-   - Read content: "package main..."
-   - Token count: 150 tokens → OK
-   - Add to batch
-
-5. Content Preparation:
-   Batch 1: [file1.go (150 tok), file2.go (200 tok), file3.md (100 tok)]
-   Total: 450 tokens + prompt overhead = ~600 tokens
-   
-   For large file (main.go, 15KB):
-   - Generate summary: "Main application entry point, HTTP server..."
-   - Create chunks: [chunk1 (lines 1-100), chunk2 (lines 101-200)...]
-   - User can request specific chunks
-
-6. LLM Request:
-   POST http://localhost:11434/api/chat
-   {
-     "model": "codellama",
-     "messages": [{
-       "role": "user",
-       "content": "Check these files for security issues:\n\nFile: src/auth.go\n```\n<content>...\n```\n..."
-     }],
-     "stream": false
-   }
-
-7. Response Processing:
-   - Receive LLM analysis
-   - Parse findings
-   - Display to user with file references
-   - Offer follow-up options (refine, check specific file, etc.)
-
-8. Follow-up (if needed):
-   User: "Show me the details in auth.go lines 45-60"
-   - Retrieve chunk from local inventory
-   - Send specific chunk to LLM
-   - Get detailed analysis
+# View results later
+./local-agent --view-last
 ```
 
-## Security & Privacy Safeguards
+### Interactive Mode
+```bash
+./local-agent -dir ./myproject --interactive
+```
 
-### Access Control
-- **Explicit Directory Approval**: User must specify directories to scan
-- **Ignore Rules**: Respect .gitignore, .agentignore patterns
-- **Path Validation**: Prevent directory traversal attacks (../)
-- **Symlink Handling**: Configurable symlink following with loop detection
+**Available commands:**
+- `help` - Show help
+- `model <name>` - Switch to different model (e.g., `model codellama`)
+- `stats` - Scan statistics
+- `files` - List scanned files
+- `last` - View previous analysis
+- `clear` - Clear history
+- `quit` - Exit
 
-### Content Protection
-- **Sensitive Pattern Detection**: Scan for API keys, passwords, tokens
-- **Binary File Exclusion**: Skip non-text files by default
-- **Size Limits**: Reject files exceeding configured limits
-- **PII Detection**: Optional scanning for emails, SSNs, etc.
+**Ask questions naturally:**
+- "Find all TODO comments"
+- "What are the main components?"
+- "Explain main.go"
+- "List API endpoints"
 
-### LLM Communication
-- **Local-First**: All processing happens locally
-- **Explicit Consent**: User approves what gets sent
-- **No Telemetry**: No usage tracking or analytics
-- **Network Isolation**: Can run fully offline with local Ollama
+**Switch models on the fly:**
+```
+> model codellama
+✅ Model switched: wizardlm2:7b → codellama
 
-### Data Handling
-- **No Persistence**: Agent doesn't store file contents
-- **Memory Management**: Clear buffers after processing
-- **Temp File Cleanup**: Remove any temporary files
-- **Audit Logging**: Optional local log of what was sent to LLM
+> find security issues
+[analysis with codellama...]
 
-## Configuration Example
+> model mistral
+✅ Model switched: codellama → mistral
+```
+
+**Navigation:**
+- `↑` Scroll up
+- `↓` Scroll down
+- `Enter` Send message
+
+### Other Commands
+```bash
+./local-agent -health                    # Check LLM connection
+./local-agent -list-models               # Show available models
+./local-agent -dry-run -dir .            # Preview files (no analysis)
+./local-agent -version                   # Show version
+./local-agent --model <name> -dir . -task "analyze"  # Use specific model
+```
+
+## ⚙️ Configuration
+
+Create `.agent/config.yaml`:
 
 ```yaml
-# .agent/config.yaml
 agent:
-  max_file_size_bytes: 1048576  # 1MB
-  token_limit: 8000
+  token_limit: 32000      # Increase for local LLMs (default: 8000)
   concurrent_files: 10
-  
+
 llm:
   provider: "ollama"
   endpoint: "http://localhost:11434"
-  model: "codellama"
+  model: "wizardlm2:7b"   # or codellama, mistral, etc.
   temperature: 0.1
-  
+
 filters:
   respect_gitignore: true
-  custom_ignore_file: ".agentignore"
-  
   deny_patterns:
     - "node_modules/**"
     - ".git/**"
     - "*.log"
-    - "*.tmp"
-    - ".env*"
-    
   allow_patterns:
     - "*.go"
     - "*.js"
-    - "*.ts"
     - "*.md"
-    - "*.yaml"
-    
+
 security:
   detect_secrets: true
   skip_binaries: true
-  follow_symlinks: false
-  max_depth: 20
-  
-chunking:
-  strategy: "smart"  # smart, lines, tokens
-  chunk_size: 1000   # tokens per chunk
-  overlap: 100       # token overlap between chunks
 ```
 
-## Usage Examples
+## 🔧 Setup with Ollama
 
 ```bash
-# Verify entire project
-local-agent verify . --task "security audit"
+# Install Ollama
+curl https://ollama.ai/install.sh | sh
 
-# Analyze specific file
-local-agent analyze src/main.go --question "explain this code"
-
-# Interactive mode
-local-agent interactive /path/to/project
-
-# Scan with custom config
-local-agent verify . --config custom-rules.yaml
-
-# List what would be analyzed (dry-run)
-local-agent verify . --dry-run
-
-# Export file inventory
-local-agent scan . --output inventory.json
-```
-
-## Integration with Ollama
-
-The tool is designed to work seamlessly with Ollama for local LLM inference:
-
-```bash
 # Start Ollama
 ollama serve
 
-# Pull a code-focused model
-ollama pull codellama
+# Pull models
+ollama pull wizardlm2:7b    # Default model
+ollama pull codellama        # Code-focused
+ollama pull mistral          # Fast general model
 
-# Run agent with Ollama
-local-agent verify . --llm ollama --model codellama
+# Use default model (wizardlm2:7b)
+./local-agent -dir . -task "analyze code"
+
+# Standard mode: specify model with flag
+./local-agent -dir . -task "analyze code" --model codellama
+
+# Interactive mode: switch models anytime with 'model <name>' command
+./local-agent -dir . --interactive
+> model codellama
+> analyze this code
 ```
 
-## Performance Considerations
+## 🏗️ Architecture
 
-- **Parallel Processing**: Concurrent file reading and analysis
-- **Streaming**: Support for streaming LLM responses
-- **Caching**: Optional local cache for repeat queries
-- **Incremental Analysis**: Process files in batches
-- **Progress Indicators**: Real-time feedback during scanning
+```
+CLI → Scanner → Analyzer → LLM Client
+       ↓         ↓
+    Filters   Chunker
+```
 
-## Future Enhancements
+- **Scanner**: Walks directories, filters files
+- **Analyzer**: Processes files by size (small/medium/large)
+- **LLM Client**: Sends context to LLM, handles responses
+- **TUI**: Interactive chat interface (optional)
 
-- [ ] Multi-model support (Claude, OpenAI, local models)
-- [ ] Interactive refinement mode
-- [ ] Diff analysis for code changes
-- [ ] Project-level insights and trends
-- [ ] Plugin system for custom analyzers
-- [ ] Web UI for visualization
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design.
+
+## 📦 Project Structure
+
+```
+local-agent/
+├── main.go              # CLI entry point
+├── config/              # Configuration
+├── filter/              # File filtering
+├── analyzer/            # File analysis
+├── llm/                 # LLM client
+├── tui/                 # Interactive mode
+├── types/               # Shared types
+└── security/            # Validation
+```
+
+## 🔐 Privacy & Security
+
+- ✅ Local-first: All scanning happens on your machine
+- ✅ Explicit control: You choose what to analyze
+- ✅ Sensitive file detection: Auto-skips .env, keys, secrets
+- ✅ Path validation: Prevents directory traversal
+- ✅ No telemetry: No usage tracking
+
+## 💡 Tips
+
+**Increase token limit for local LLMs:**
+```yaml
+agent:
+  token_limit: 32000  # Default is 8000
+```
+
+**Adjust temperature for different tasks:**
+```yaml
+llm:
+  temperature: 0.1  # Default - precise, deterministic (code analysis, security)
+  # temperature: 0.7  # Creative, varied (documentation, explanations)
+  # temperature: 0.0  # Most deterministic (factual extraction, parsing)
+```
+- **0.0-0.3**: Best for code analysis, security audits, bug finding (deterministic)
+- **0.4-0.7**: Good for documentation, explanations, suggestions (balanced)
+- **0.8-1.0**: Creative tasks, brainstorming (more varied, less predictable)
+
+**Review analysis later:**
+```bash
+./local-agent -dir . -task "audit"
+# ... results displayed ...
+
+# View again later
+./local-agent --view-last
+# or in interactive mode: type 'last'
+```
+
+**Large projects:**
+- Agent automatically batches files if they exceed token limit
+- Adjust `token_limit` based on your model's context window
+- Use filters to focus on specific file types
+
+## 📝 Example Workflows
+
+**Security Audit:**
+```bash
+./local-agent -dir . -task "find security vulnerabilities"
+```
+
+**Documentation:**
+```bash
+./local-agent -dir ./src -task "generate API documentation"
+```
+
+**Code Review:**
+```bash
+./local-agent --interactive -dir .
+> explain the authentication flow
+> find potential bugs in auth.go
+> suggest improvements
+```
+
+## 🛠️ Development
+
+```bash
+# Build
+go build -o local-agent
+
+# Run tests
+go test ./...
+
+# Run with config
+./local-agent -config examples/config.yaml -dir . -task "test"
+```

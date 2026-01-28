@@ -1,5 +1,3 @@
-.PHONY: all build build-macos build-linux clean test fmt vet help
-
 # Binary name
 BINARY_NAME=local-agent
 
@@ -19,6 +17,9 @@ LDFLAGS=-ldflags "-s -w"
 BUILD_DIR=build
 MACOS_DIR=$(BUILD_DIR)/macos
 LINUX_DIR=$(BUILD_DIR)/linux
+
+.DEFAULT_GOAL := help
+.PHONY: all build build-macos build-linux clean test fmt vet help
 
 all: clean build
 

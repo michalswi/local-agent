@@ -79,7 +79,7 @@ func (v *Validator) initializeSecretPatterns() {
 func (v *Validator) ValidatePath(path string) error {
 	// Check for directory traversal
 	cleanPath := filepath.Clean(path)
-	if strings.Contains(cleanPath, "..") {
+	if strings.Contains(cleanPath, string(filepath.Separator)+".."+string(filepath.Separator)) || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("path traversal detected: %s", path)
 	}
 

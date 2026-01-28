@@ -1,11 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"local-agent/analyzer"
@@ -13,7 +13,10 @@ import (
 	"local-agent/filter"
 	"local-agent/llm"
 	"local-agent/security"
+	"local-agent/tui"
 	"local-agent/types"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 const version = "0.1.0"
@@ -21,17 +24,26 @@ const version = "0.1.0"
 func main() {
 	// Define CLI flags
 	var (
-		configPath  = flag.String("config", "", "Path to configuration file")
-		task        = flag.String("task", "", "Analysis task description")
-		directory   = flag.String("dir", ".", "Directory to analyze")
-		dryRun      = flag.Bool("dry-run", false, "List files without analyzing")
-		outputPath  = flag.String("output", "", "Output file for results")
+		configPath = flag.String("config", "", "Path to configuration file")
+		task       = flag.String("task", "", "Analysis task description")
+		directory  = flag.String("dir", ".", "Directory to analyze")
+		model      = flag.String("model", "", "LLM model to use (overrides config)")
+		dryRun     = flag.Bool("dry-run", false, "List files without analyzing")
+		viewLast   = flag.Bool("view-last", false, "View the last saved analysis")
+
 		showVersion = flag.Bool("version", false, "Show version")
 		checkHealth = flag.Bool("health", false, "Check LLM connectivity")
 		listModels  = flag.Bool("list-models", false, "List available LLM models")
+		interactive = flag.Bool("interactive", false, "Start interactive mode")
 	)
 
 	flag.Parse()
+
+	// View last analysis
+	if *viewLast {
+		viewLastAnalysis()
+		return
+	}
 
 	// Show version
 	if *showVersion {
@@ -44,6 +56,11 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Invalid configuration: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Override model if specified via flag
+	if *model != "" {
+		cfg.LLM.Model = *model
 	}
 
 	// Initialize LLM client
@@ -73,6 +90,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// If interactive mode requested, start the interactive session
+	if *interactive {
+		startInteractiveMode(absDir, cfg, llmClient)
+		return
+	}
+
 	// Run agent
 	fmt.Printf("🔍 Local Agent v%s\n", version)
 	fmt.Printf("📁 Analyzing directory: %s\n", absDir)
@@ -90,9 +113,6 @@ func main() {
 
 	// If dry-run, stop here
 	if *dryRun {
-		if *outputPath != "" {
-			saveResult(result, *outputPath)
-		}
 		return
 	}
 
@@ -115,9 +135,13 @@ func main() {
 	// Display analysis results
 	displayAnalysisResult(analysisResult)
 
-	// Save results if output path specified
-	if *outputPath != "" {
-		saveAnalysisResult(analysisResult, *outputPath)
+	// Save analysis to temp file for later viewing
+	tempFile, err := saveAnalysisToTemp(analysisResult, *task)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\n⚠️  Failed to save to temp file: %v\n", err)
+	} else {
+		fmt.Printf("\n💾 Results also saved to: %s\n", tempFile)
+		fmt.Printf("💡 View anytime with: ./local-agent --view-last\n")
 	}
 }
 
@@ -140,44 +164,83 @@ func scanDirectory(rootPath string, cfg *config.Config) (*types.ScanResult, erro
 		Summary:  make(map[string]int),
 	}
 
-	// Walk directory
+	visitedDirs := make(map[string]struct{})
 	var filePaths []string
-	err = filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
+
+	var walk func(string, int)
+	walk = func(current string, depth int) {
+		info, err := os.Lstat(current)
 		if err != nil {
-			result.Errors = append(result.Errors, types.ScanError{
-				Path:  path,
-				Error: err.Error(),
-				Time:  time.Now(),
-			})
-			return nil
+			result.Errors = append(result.Errors, types.ScanError{Path: current, Error: err.Error(), Time: time.Now()})
+			return
 		}
 
-		// Skip directories
+		// Follow symlinks when enabled
+		if info.Mode()&os.ModeSymlink != 0 {
+			if !fileFilter.ShouldFollowSymlink(current) {
+				return
+			}
+
+			target, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				result.Errors = append(result.Errors, types.ScanError{Path: current, Error: err.Error(), Time: time.Now()})
+				return
+			}
+
+			targetAbs, _ := filepath.Abs(target)
+
+			// Avoid cycles
+			if _, seen := visitedDirs[targetAbs]; seen {
+				return
+			}
+
+			info, err = os.Stat(targetAbs)
+			if err != nil {
+				result.Errors = append(result.Errors, types.ScanError{Path: targetAbs, Error: err.Error(), Time: time.Now()})
+				return
+			}
+
+			current = targetAbs
+		}
+
+		// Validate path traversal
+		if err := validator.ValidatePath(current); err != nil {
+			return
+		}
+
 		if info.IsDir() {
-			return nil
+			if !fileFilter.IsWithinDepthLimit(depth) {
+				return
+			}
+
+			absDir, _ := filepath.Abs(current)
+			visitedDirs[absDir] = struct{}{}
+
+			entries, err := os.ReadDir(current)
+			if err != nil {
+				result.Errors = append(result.Errors, types.ScanError{Path: current, Error: err.Error(), Time: time.Now()})
+				return
+			}
+
+			for _, entry := range entries {
+				childPath := filepath.Join(current, entry.Name())
+				walk(childPath, depth+1)
+			}
+			return
 		}
 
-		// Validate path
-		if err := validator.ValidatePath(path); err != nil {
-			return nil
-		}
-
-		// Apply filters
-		if !fileFilter.ShouldInclude(path, info) {
+		// Apply filters to files
+		if !fileFilter.ShouldInclude(current, info) {
 			result.FilteredFiles++
-			return nil
+			return
 		}
 
-		filePaths = append(filePaths, path)
+		filePaths = append(filePaths, current)
 		result.TotalFiles++
 		result.TotalSize += info.Size()
-
-		return nil
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to walk directory: %w", err)
 	}
+
+	walk(rootPath, 0)
 
 	// Analyze files
 	fileInfos, errors := analyzer.AnalyzeFiles(filePaths, rootPath)
@@ -215,6 +278,20 @@ func analyzeFiles(scanResult *types.ScanResult, task string, cfg *config.Config,
 		fileInfoPtrs[i] = &scanResult.Files[i]
 	}
 
+	// Check if we need to batch process
+	totalTokens := 0
+	for _, file := range fileInfoPtrs {
+		if file != nil && file.IsReadable && !file.IsSensitive {
+			totalTokens += file.TokenCount
+		}
+	}
+
+	// If total tokens exceed limit, process in batches
+	if totalTokens > cfg.Agent.TokenLimit {
+		return analyzeBatches(fileInfoPtrs, task, cfg, llmClient, analyzer)
+	}
+
+	// Process all files at once
 	content := analyzer.PrepareForLLM(fileInfoPtrs, cfg.Agent.TokenLimit)
 
 	// Send to LLM
@@ -224,6 +301,80 @@ func analyzeFiles(scanResult *types.ScanResult, task string, cfg *config.Config,
 	}
 
 	return response, nil
+}
+
+func analyzeBatches(files []*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzer *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+	var allResponses []string
+	var totalTokens int
+	var totalDuration time.Duration
+	model := ""
+
+	fmt.Printf("\n📦 Processing files in batches (too many files for single analysis)\n")
+
+	currentBatch := make([]*types.FileInfo, 0)
+	currentTokens := 0
+	batchNum := 1
+
+	for _, file := range files {
+		if file == nil || !file.IsReadable {
+			continue
+		}
+
+		// If adding this file exceeds token limit, process current batch
+		if currentTokens+file.TokenCount > cfg.Agent.TokenLimit && len(currentBatch) > 0 {
+			fmt.Printf("   Processing batch %d (%d files)...\n", batchNum, len(currentBatch))
+			response, err := processBatch(currentBatch, task, cfg, llmClient, analyzer)
+			if err != nil {
+				fmt.Printf("   ⚠️  Batch %d failed: %v\n", batchNum, err)
+			} else {
+				allResponses = append(allResponses, fmt.Sprintf("\n=== Batch %d ===%s", batchNum, response.Response))
+				totalTokens += response.TokensUsed
+				totalDuration += response.Duration
+				if model == "" {
+					model = response.Model
+				}
+			}
+
+			// Reset for next batch
+			currentBatch = make([]*types.FileInfo, 0)
+			currentTokens = 0
+			batchNum++
+		}
+
+		currentBatch = append(currentBatch, file)
+		currentTokens += file.TokenCount
+	}
+
+	// Process remaining batch
+	if len(currentBatch) > 0 {
+		fmt.Printf("   Processing batch %d (%d files)...\n", batchNum, len(currentBatch))
+		response, err := processBatch(currentBatch, task, cfg, llmClient, analyzer)
+		if err != nil {
+			fmt.Printf("   ⚠️  Batch %d failed: %v\n", batchNum, err)
+		} else {
+			allResponses = append(allResponses, fmt.Sprintf("\n=== Batch %d ===%s", batchNum, response.Response))
+			totalTokens += response.TokensUsed
+			totalDuration += response.Duration
+			if model == "" {
+				model = response.Model
+			}
+		}
+	}
+
+	// Aggregate results
+	aggregatedResponse := &types.AnalysisResponse{
+		Response:   strings.Join(allResponses, "\n"),
+		Model:      model,
+		TokensUsed: totalTokens,
+		Duration:   totalDuration,
+	}
+
+	return aggregatedResponse, nil
+}
+
+func processBatch(batch []*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzer *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+	content := analyzer.PrepareForLLM(batch, cfg.Agent.TokenLimit)
+	return llmClient.Analyze(task, content, cfg.LLM.Temperature)
 }
 
 func displayScanResult(result *types.ScanResult) {
@@ -309,34 +460,87 @@ func listAvailableModels(client *llm.OllamaClient) {
 	}
 }
 
-func saveResult(result *types.ScanResult, outputPath string) {
-	data, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to marshal result: %v\n", err)
-		return
+func saveAnalysisToTemp(result *types.AnalysisResponse, task string) (string, error) {
+	tempDir := os.TempDir()
+	tempFile := filepath.Join(tempDir, fmt.Sprintf("local-agent-analysis-%d.txt", time.Now().Unix()))
+	lastFile := filepath.Join(tempDir, "local-agent-last.txt")
+
+	var content strings.Builder
+	content.WriteString("Analysis Results\n")
+	content.WriteString(fmt.Sprintf("Generated: %s\n", time.Now().Format(time.RFC3339)))
+	content.WriteString(fmt.Sprintf("Model: %s\n", result.Model))
+	content.WriteString(fmt.Sprintf("Tokens: %d\n", result.TokensUsed))
+	content.WriteString(fmt.Sprintf("Duration: %v\n", result.Duration))
+	content.WriteString("\n" + strings.Repeat("=", 80) + "\n\n")
+	content.WriteString(fmt.Sprintf("TASK:\n%s\n\n", task))
+	content.WriteString(strings.Repeat("-", 80) + "\n\n")
+	content.WriteString(fmt.Sprintf("RESPONSE:\n%s\n", result.Response))
+
+	contentBytes := []byte(content.String())
+
+	// Save to timestamped file
+	if err := os.WriteFile(tempFile, contentBytes, 0644); err != nil {
+		return "", fmt.Errorf("failed to write temp file: %w", err)
 	}
 
-	if err := os.WriteFile(outputPath, data, 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to write result: %v\n", err)
-		return
+	// Save to last file for --view-last
+	if err := os.WriteFile(lastFile, contentBytes, 0644); err != nil {
+		// Don't fail if we can't write last file
+		fmt.Fprintf(os.Stderr, "Warning: failed to save last file: %v\n", err)
 	}
 
-	fmt.Printf("\n💾 Results saved to: %s\n", outputPath)
+	return tempFile, nil
 }
 
-func saveAnalysisResult(result *types.AnalysisResponse, outputPath string) {
-	data, err := json.MarshalIndent(result, "", "  ")
+func viewLastAnalysis() {
+	lastFile := filepath.Join(os.TempDir(), "local-agent-last.txt")
+
+	content, err := os.ReadFile(lastFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to marshal result: %v\n", err)
-		return
+		if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "No previous analysis found.\n")
+			fmt.Fprintf(os.Stderr, "Run an analysis first with: ./local-agent -dir <path> -task \"<task>\"\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "Failed to read last analysis: %v\n", err)
+		}
+		os.Exit(1)
 	}
 
-	if err := os.WriteFile(outputPath, data, 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to write result: %v\n", err)
-		return
+	fmt.Print(string(content))
+}
+
+func displayAnalysisSummary(result *types.AnalysisResponse) {
+	fmt.Printf("📊 Summary:\n")
+	fmt.Printf("   Model: %s\n", result.Model)
+	fmt.Printf("   Tokens: %d\n", result.TokensUsed)
+	fmt.Printf("   Duration: %v\n", result.Duration)
+	if len(result.Findings) > 0 {
+		fmt.Printf("   Findings: %d\n", len(result.Findings))
+	}
+}
+
+func startInteractiveMode(directory string, cfg *config.Config, llmClient *llm.OllamaClient) {
+	fmt.Printf("🔍 Scanning directory: %s\n", directory)
+	fmt.Printf("⏳ Please wait...\n\n")
+
+	// Perform initial scan
+	scanResult, err := scanDirectory(directory, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to scan directory: %v\n", err)
+		os.Exit(1)
 	}
 
-	fmt.Printf("\n💾 Analysis saved to: %s\n", outputPath)
+	fmt.Printf("✅ Scan complete! Found %d files\n", scanResult.TotalFiles)
+	fmt.Printf("🚀 Starting interactive mode...\n\n")
+
+	// Start interactive TUI
+	m := tui.NewInteractiveModel(directory, cfg.LLM.Model, cfg.LLM.Endpoint, scanResult, cfg, llmClient)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running interactive mode: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func formatBytes(bytes int64) string {

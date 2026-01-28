@@ -44,19 +44,20 @@ const (
 
 // FileInfo represents metadata and content information about a file
 type FileInfo struct {
-	Path        string       `json:"path"`
-	RelPath     string       `json:"rel_path"`
-	Size        int64        `json:"size"`
-	Category    FileCategory `json:"category"`
-	Type        FileType     `json:"type"`
-	Extension   string       `json:"extension"`
-	ModTime     time.Time    `json:"mod_time"`
-	IsReadable  bool         `json:"is_readable"`
-	IsSensitive bool         `json:"is_sensitive"`
-	TokenCount  int          `json:"token_count,omitempty"`
-	Content     string       `json:"content,omitempty"`
-	Summary     string       `json:"summary,omitempty"`
-	Chunks      []FileChunk  `json:"chunks,omitempty"`
+	Path        string              `json:"path"`
+	RelPath     string              `json:"rel_path"`
+	Size        int64               `json:"size"`
+	Category    FileCategory        `json:"category"`
+	Type        FileType            `json:"type"`
+	Extension   string              `json:"extension"`
+	ModTime     time.Time           `json:"mod_time"`
+	IsReadable  bool                `json:"is_readable"`
+	IsSensitive bool                `json:"is_sensitive"`
+	Violations  []SecurityViolation `json:"violations,omitempty"`
+	TokenCount  int                 `json:"token_count,omitempty"`
+	Content     string              `json:"content,omitempty"`
+	Summary     string              `json:"summary,omitempty"`
+	Chunks      []FileChunk         `json:"chunks,omitempty"`
 }
 
 // FileChunk represents a portion of a large file

@@ -10,6 +10,7 @@ import (
 // Filter manages file filtering based on patterns and rules
 type Filter struct {
 	config          *config.Config
+	rootDir         string
 	gitignoreParser *IgnoreParser
 	denyParser      *IgnoreParser
 	allowParser     *IgnoreParser
@@ -19,6 +20,7 @@ type Filter struct {
 func NewFilter(cfg *config.Config, rootDir string) (*Filter, error) {
 	f := &Filter{
 		config:      cfg,
+		rootDir:     rootDir,
 		denyParser:  NewIgnoreParser(),
 		allowParser: NewIgnoreParser(),
 	}
@@ -53,10 +55,11 @@ func NewFilter(cfg *config.Config, rootDir string) (*Filter, error) {
 
 // ShouldInclude determines if a file should be included based on filters
 func (f *Filter) ShouldInclude(path string, info interface{}) bool {
-	// Get relative path for matching
-	relPath := path
-
-	// Normalize path
+	// Prefer matching on workspace-relative paths for predictable glob behavior
+	relPath, err := filepath.Rel(f.rootDir, path)
+	if err != nil {
+		relPath = path
+	}
 	relPath = filepath.ToSlash(relPath)
 
 	// Determine if it's a directory (assumed false for files)

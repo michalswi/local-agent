@@ -172,16 +172,18 @@ func (c *OllamaClient) ListModels() ([]string, error) {
 func (c *OllamaClient) Analyze(task string, filesContent string, temperature float64) (*types.AnalysisResponse, error) {
 	startTime := time.Now()
 
-	// Construct the prompt
+	// Construct the prompt - make it task-focused
 	systemMessage := Message{
 		Role: "system",
-		Content: "You are a code analysis assistant. Analyze the provided files and respond with detailed findings. " +
-			"Focus on code quality, security issues, potential bugs, and best practices.",
+		Content: "You are a code analysis assistant. Carefully follow the user's task and provide a clear, well-structured response based on the files provided. " +
+			"Always include concrete, actionable fixes. If the user asks for new code or applied suggestions, include updated code blocks or concise patch-style snippets that implement the recommendations. " +
+			"List findings with severity, then propose changes, then show any revised code. Keep the output concise and directly applicable. " +
+			"When you present code, wrap it in fenced markdown blocks with a language tag (e.g., ```go ... ```). Separate multiple files with clear headings.",
 	}
 
 	userMessage := Message{
 		Role:    "user",
-		Content: fmt.Sprintf("Task: %s\n\n%s", task, filesContent),
+		Content: fmt.Sprintf("**Task:** %s\n\nPlease complete this task based on the following files:\n\n%s", task, filesContent),
 	}
 
 	request := &ChatRequest{

@@ -7,20 +7,23 @@ import (
 	"strings"
 
 	"local-agent/config"
+	"local-agent/llm"
 	"local-agent/types"
 )
 
 // Chunker handles chunking of files into smaller pieces
 type Chunker struct {
-	config   *config.ChunkingConfig
-	detector *Detector
+	config    *config.ChunkingConfig
+	detector  *Detector
+	tokenizer *llm.Tokenizer
 }
 
 // NewChunker creates a new Chunker with the specified configuration
 func NewChunker(cfg *config.ChunkingConfig) *Chunker {
 	return &Chunker{
-		config:   cfg,
-		detector: NewDetector(),
+		config:    cfg,
+		detector:  NewDetector(),
+		tokenizer: llm.NewTokenizer(),
 	}
 }
 
@@ -47,6 +50,7 @@ func (c *Chunker) chunkByLines(path string) ([]types.FileChunk, error) {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024) // allow large lines
 	var chunks []types.FileChunk
 	var currentLines []string
 	lineNum := 1
@@ -289,8 +293,11 @@ func (c *Chunker) calculateOverlapLines(lines []string) int {
 // estimateTokens estimates the number of tokens in text
 // This is a rough approximation: ~1 token per 4 characters
 func (c *Chunker) estimateTokens(text string) int {
-	// Simple estimation: 1 token ≈ 4 characters
-	// For more accurate counting, integrate a proper tokenizer
+	if c.tokenizer != nil {
+		return c.tokenizer.EstimateTokensSimple(text)
+	}
+
+	// Fallback heuristic
 	return len(text) / 4
 }
 
