@@ -1,0 +1,45 @@
+# .gitignore for local-agent project
+
+# Binaries
+local-agent
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Config files with secrets
+.env
+.env.*
+config.local.yaml
+
+# Output files
+*.json
+*.log
+
+# Build artifacts
+dist/
+build/
