@@ -20,7 +20,23 @@ Scan, analyze files, and chat with your codebase using local LLMs
 ## 🚀 Quick Start
 
 ```bash
+# make
+$ make
+Available targets:
+  make build         - Build binary for current platform
+  make build-macos   - Build binary for macOS (arm64 and amd64)
+  make build-linux   - Build binary for Linux (amd64 and arm64)
+  make all           - Clean and build for current platform
+  make clean         - Remove build artifacts
+  make test          - Run tests
+  make fmt           - Format code
+  make vet           - Run go vet
+```
+
+```bash
 # Build
+make build
+or
 go build -o local-agent
 
 # Analyze a directory
@@ -236,17 +252,4 @@ llm:
 > explain the authentication flow
 > find potential bugs in auth.go
 > suggest improvements
-```
-
-## 🛠️ Development
-
-```bash
-# Build
-go build -o local-agent
-
-# Run tests
-go test ./...
-
-# Run with config
-./local-agent -config examples/config.yaml -dir . -task "test"
 ```
