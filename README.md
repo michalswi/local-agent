@@ -159,8 +159,8 @@ ollama pull mistral          # Fast general model
 
 ```
 CLI → Scanner → Analyzer → LLM Client
-       ↓         ↓
-    Filters   Chunker
+         ↓         ↓
+      Filters   Chunker
 ```
 
 - **Scanner**: Walks directories, filters files
@@ -183,14 +183,6 @@ local-agent/
 ├── types/               # Shared types
 └── security/            # Validation
 ```
-
-## 🔐 Privacy & Security
-
-- ✅ Local-first: All scanning happens on your machine
-- ✅ Explicit control: You choose what to analyze
-- ✅ Sensitive file detection: Auto-skips .env, keys, secrets
-- ✅ Path validation: Prevents directory traversal
-- ✅ No telemetry: No usage tracking
 
 ## 💡 Tips
 
