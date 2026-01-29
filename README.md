@@ -39,10 +39,10 @@ make build
 or
 go build -o local-agent
 
-# Analyze a directory
+# Analyze a directory (STANDARD mode)
 ./local-agent -dir ./myproject -task "find security issues"
 
-# Interactive mode
+# INTERACTIVE mode
 ./local-agent -dir ./myproject --interactive
 
 # View last analysis
@@ -156,8 +156,8 @@ ollama serve
 
 # Pull models
 ollama pull wizardlm2:7b    # Default model
-ollama pull codellama        # Code-focused
-ollama pull mistral          # Fast general model
+ollama pull codellama       # Code-focused
+ollama pull mistral         # Fast general model
 
 # Use default model (wizardlm2:7b)
 ./local-agent -dir . -task "analyze code"
