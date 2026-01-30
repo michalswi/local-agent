@@ -80,7 +80,6 @@ func DefaultConfig() *Config {
 			DenyPatterns: []string{
 				"node_modules/**",
 				".git/**",
-				"*.log",
 				"*.tmp",
 				".env*",
 				"*.key",
@@ -112,6 +111,7 @@ func DefaultConfig() *Config {
 				"*.swift",
 				"*.kt",
 				"*.scala",
+				"*.log",
 			},
 		},
 		Security: SecurityConfig{
