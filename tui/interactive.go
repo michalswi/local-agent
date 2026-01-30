@@ -9,7 +9,9 @@ import (
 
 	"local-agent/analyzer"
 	"local-agent/config"
+	"local-agent/filter"
 	"local-agent/llm"
+	"local-agent/security"
 	"local-agent/types"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -51,6 +53,11 @@ type Message struct {
 type processCompleteMsg struct {
 	response string
 	err      error
+}
+
+type rescanCompleteMsg struct {
+	scanResult *types.ScanResult
+	err        error
 }
 
 // NewInteractiveModel creates a new interactive mode model
@@ -111,6 +118,10 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Quit
 				}
 				m.input.Reset()
+				// Trigger rescan if command was rescan
+				if strings.ToLower(userInput) == "rescan" {
+					return m, m.performRescan()
+				}
 				return m, nil
 			}
 
@@ -153,6 +164,24 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, Message{
 				Role:      "assistant",
 				Content:   msg.response,
+				Timestamp: time.Now(),
+			})
+		}
+		return m, nil
+
+	case rescanCompleteMsg:
+		m.processing = false
+		if msg.err != nil {
+			m.messages = append(m.messages, Message{
+				Role:      "assistant",
+				Content:   fmt.Sprintf("❌ Rescan failed: %v", msg.err),
+				Timestamp: time.Now(),
+			})
+		} else {
+			m.scanResult = msg.scanResult
+			m.messages = append(m.messages, Message{
+				Role:      "assistant",
+				Content:   fmt.Sprintf("✅ Rescan complete!\n\nFiles found: %d\nFiltered: %d\nTotal size: %s", msg.scanResult.TotalFiles, msg.scanResult.FilteredFiles, formatBytes(msg.scanResult.TotalSize)),
 				Timestamp: time.Now(),
 			})
 		}
@@ -286,6 +315,7 @@ func (m *InteractiveModel) handleCommand(input string) bool {
 		helpMsg := `Available commands:
 • help, h - Show this help message
 • model <name> - Switch to a different LLM model
+• rescan - Re-scan directory for new/changed files
 • stats - Show scan statistics
 • files - List scanned files
 • last - View last saved analysis
@@ -381,6 +411,15 @@ File breakdown:`,
 		m.messages = append(m.messages, Message{
 			Role:      "assistant",
 			Content:   "🧹 Conversation history cleared.",
+			Timestamp: time.Now(),
+		})
+		return true
+
+	case "rescan":
+		m.processing = true
+		m.messages = append(m.messages, Message{
+			Role:      "assistant",
+			Content:   "🔄 Rescanning directory...",
 			Timestamp: time.Now(),
 		})
 		return true
@@ -521,4 +560,96 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (m InteractiveModel) performRescan() tea.Cmd {
+	return func() tea.Msg {
+		// Import needed here would cause circular dependency, so we duplicate the scan logic
+		analyzer := analyzer.NewAnalyzer(m.cfg)
+		filter, err := filter.NewFilter(m.cfg, m.directory)
+		if err != nil {
+			return rescanCompleteMsg{err: err}
+		}
+		validator := security.NewValidator()
+
+		result := &types.ScanResult{
+			RootPath: m.directory,
+			Files:    make([]types.FileInfo, 0),
+			Errors:   make([]types.ScanError, 0),
+			Summary:  make(map[string]int),
+		}
+
+		visitedDirs := make(map[string]struct{})
+		var filePaths []string
+
+		var walk func(string, int)
+		walk = func(current string, depth int) {
+			info, err := os.Lstat(current)
+			if err != nil {
+				return
+			}
+
+			if info.Mode()&os.ModeSymlink != 0 {
+				if !filter.ShouldFollowSymlink(current) {
+					return
+				}
+				target, err := filepath.EvalSymlinks(current)
+				if err != nil {
+					return
+				}
+				targetAbs, _ := filepath.Abs(target)
+				if _, seen := visitedDirs[targetAbs]; seen {
+					return
+				}
+				info, err = os.Stat(targetAbs)
+				if err != nil {
+					return
+				}
+				current = targetAbs
+			}
+
+			if err := validator.ValidatePath(current); err != nil {
+				return
+			}
+
+			if info.IsDir() {
+				if !filter.IsWithinDepthLimit(depth) {
+					return
+				}
+				absDir, _ := filepath.Abs(current)
+				visitedDirs[absDir] = struct{}{}
+				entries, err := os.ReadDir(current)
+				if err != nil {
+					return
+				}
+				for _, entry := range entries {
+					childPath := filepath.Join(current, entry.Name())
+					walk(childPath, depth+1)
+				}
+				return
+			}
+
+			if !filter.ShouldInclude(current, info) {
+				result.FilteredFiles++
+				return
+			}
+
+			filePaths = append(filePaths, current)
+			result.TotalFiles++
+			result.TotalSize += info.Size()
+		}
+
+		walk(m.directory, 0)
+
+		fileInfos, errors := analyzer.AnalyzeFiles(filePaths, m.directory)
+		for i, fileInfo := range fileInfos {
+			if errors[i] == nil && fileInfo != nil {
+				result.Files = append(result.Files, *fileInfo)
+				result.Summary[string(fileInfo.Type)]++
+				result.Summary[string(fileInfo.Category)]++
+			}
+		}
+
+		return rescanCompleteMsg{scanResult: result}
+	}
 }

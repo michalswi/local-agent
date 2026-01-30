@@ -9,12 +9,14 @@ Scan, analyze files, and chat with your codebase using local LLMs
 
 ## ✨ Features
 
-- 🔍 **Smart File Scanning** - Respects .gitignore, detects file types, handles large codebases
-- 🤖 **LLM Analysis** - Works with Ollama (local) or cloud LLMs for code analysis
-- 💬 **Interactive Mode** - Chat with your codebase using a beautiful TUI
+- 🔍 **Smart File Scanning** - Respects .gitignore, follows symlinks, enforces depth limits
+- 🛡️ **Security-Aware** - Detects and sanitizes secrets/PII before sending to LLM
+- 🤖 **LLM Analysis** - Works with Ollama (local) - analyze code, documents, books, medical records, etc.
+- 💬 **Interactive Mode** - Chat with your files using a beautiful TUI with live rescan
 - 🔒 **Privacy First** - All scanning happens locally, you control what's sent to LLM
-- 📊 **Token Management** - Automatic batching for large projects
+- 📊 **Token Management** - Automatic batching for large projects, handles long lines
 - 💾 **Auto-Save Results** - Analysis saved to temp file for easy review
+- 🎯 **Action-Oriented** - LLM provides concrete fixes and code snippets in fenced blocks
 
 
 ## 🚀 Quick Start
@@ -76,6 +78,7 @@ go build -o local-agent
 **Available commands:**
 - `help` - Show help
 - `model <name>` - Switch to different model (e.g., `model codellama`)
+- `rescan` - Re-scan directory for new/changed files
 - `stats` - Scan statistics
 - `files` - List scanned files
 - `last` - View previous analysis
@@ -86,7 +89,13 @@ go build -o local-agent
 - "Find all TODO comments"
 - "What are the main components?"
 - "Explain main.go"
-- "List API endpoints"
+- "Show me the configuration for GKE" (provides exact code)
+- "Analyze these medical records for patterns"
+
+**Request code changes:**
+- "Analyze main.go file and show me new code with applied suggestions"
+- "Fix the security issues in auth.go"
+- "Refactor this function to be more readable"
 
 **Switch models on the fly:**
 ```
@@ -141,8 +150,10 @@ filters:
     - "*.md"
 
 security:
-  detect_secrets: true
+  detect_secrets: true    # Scans for secrets/PII and sanitizes
   skip_binaries: true
+  follow_symlinks: true   # Follow symlinks during scan
+  max_depth: 20           # Maximum directory depth
 ```
 
 ## 🔧 Setup with Ollama
@@ -202,6 +213,26 @@ local-agent/
 
 ## 💡 Tips
 
+**Use rescan in interactive mode:**
+```bash
+./local-agent -dir . --interactive
+> rescan  # Pick up new/changed files without restarting
+```
+
+**Analyze any document type:**
+```bash
+# Not just code - analyze books, medical records, calculations, etc.
+./local-agent -dir ./documents -task "summarize these medical reports"
+./local-agent -dir ./research -task "extract key findings from these papers"
+```
+
+**Request exact code snippets:**
+```bash
+# LLM will provide literal content in fenced markdown blocks
+./local-agent -dir . -task "show me the configuration for database setup"
+./local-agent -dir . -task "copy paste the authentication middleware code"
+```
+
 **Increase token limit for local LLMs:**
 ```yaml
 agent:
@@ -233,6 +264,12 @@ llm:
 - Agent automatically batches files if they exceed token limit
 - Adjust `token_limit` based on your model's context window
 - Use filters to focus on specific file types
+- Scanner handles long-line files (minified code, etc.) up to 1MB per line
+
+**Security & Privacy:**
+- Files flagged as sensitive are automatically skipped or redacted
+- Secrets/PII detected and sanitized before LLM submission
+- All violations logged in scan results
 
 ## 📝 Example Workflows
 
@@ -251,5 +288,13 @@ llm:
 ./local-agent --interactive -dir .
 > explain the authentication flow
 > find potential bugs in auth.go
-> suggest improvements
+> suggest improvements with code examples
+> rescan  # After making changes
+> verify the fixes work correctly
+```
+
+**Extract Configuration:**
+```bash
+./local-agent -dir ./infra -task "show me the Terraform block for GKE configuration"
+# Returns exact literal config in fenced code blocks
 ```
