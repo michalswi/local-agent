@@ -123,6 +123,63 @@ go build -o local-agent
 ./local-agent --model <name> -dir . -task "analyze"  # Use specific model
 ```
 
+## 📁 File Filtering
+
+The agent filters files based on patterns defined in [config/config.go](config/config.go). By default:
+
+### ✅ Allowed File Types
+
+| Category | Extensions | Description |
+|----------|-----------|-------------|
+| **Go** | `*.go` | Go source files |
+| **JavaScript/TypeScript** | `*.js`, `*.ts` | JavaScript and TypeScript files |
+| **Python** | `*.py` | Python scripts |
+| **Java** | `*.java` | Java source files |
+| **C/C++** | `*.c`, `*.cpp`, `*.h` | C and C++ source and header files |
+| **Rust** | `*.rs` | Rust source files |
+| **Ruby** | `*.rb` | Ruby scripts |
+| **PHP** | `*.php` | PHP files |
+| **Swift** | `*.swift` | Swift source files |
+| **Kotlin** | `*.kt` | Kotlin files |
+| **Scala** | `*.scala` | Scala files |
+| **Shell** | `*.sh` | Shell scripts |
+| **Configuration** | `*.yaml`, `*.yml`, `*.json`, `*.tf` | YAML, JSON, Terraform files |
+| **Documentation** | `*.md`, `*.txt` | Markdown and text files |
+| **Logs** | `*.log` | Log files |
+
+### ❌ Denied Patterns (Always Excluded)
+
+| Pattern | Description |
+|---------|-------------|
+| `node_modules/**` | Node.js dependencies |
+| `.git/**` | Git repository data |
+| `dist/**` | Distribution/build output |
+| `build/**` | Build artifacts |
+| `vendor/**` | Vendor dependencies |
+| `*.tmp` | Temporary files |
+| `.env*` | Environment files (sensitive) |
+| `*.key`, `*.pem`, `*.crt` | Cryptographic keys and certificates |
+
+### 🔧 Custom Filters
+
+You can override these defaults in `.agent/config.yaml`:
+
+```yaml
+filters:
+  respect_gitignore: true    # Also respect .gitignore rules
+  custom_ignore_file: ".agentignore"  # Custom ignore file
+  deny_patterns:
+    - "node_modules/**"
+    - ".git/**"
+    - "*.log"
+  allow_patterns:
+    - "*.go"
+    - "*.js"
+    - "*.md"
+```
+
+**Note:** If `allow_patterns` is specified, **only** files matching those patterns will be included (unless explicitly denied).
+
 ## ⚙️ Configuration
 
 Create `.agent/config.yaml`:
