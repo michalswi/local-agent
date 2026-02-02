@@ -102,12 +102,13 @@ type AnalysisRequest struct {
 
 // AnalysisResponse represents the LLM's analysis response
 type AnalysisResponse struct {
-	Response    string        `json:"response"`
-	Model       string        `json:"model"`
-	TokensUsed  int           `json:"tokens_used"`
-	Duration    time.Duration `json:"duration"`
-	Findings    []Finding     `json:"findings,omitempty"`
-	Suggestions []string      `json:"suggestions,omitempty"`
+	Response    string         `json:"response"`
+	Model       string         `json:"model"`
+	TokensUsed  int            `json:"tokens_used"`
+	FileTokens  map[string]int `json:"file_tokens,omitempty"`
+	Duration    time.Duration  `json:"duration"`
+	Findings    []Finding      `json:"findings,omitempty"`
+	Suggestions []string       `json:"suggestions,omitempty"`
 }
 
 // Finding represents a specific finding in the analysis

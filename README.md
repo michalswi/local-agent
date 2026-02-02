@@ -1,73 +1,42 @@
 # Local Agent - AI-powered code analysis tool
 
-![](https://img.shields.io/github/stars/michalswi/local-agent)
-![](https://img.shields.io/github/last-commit/michalswi/local-agent)
-![](https://img.shields.io/github/forks/michalswi/local-agent)
-![](https://img.shields.io/github/issues/michalswi/local-agent)
-
-Scan, analyze files, and chat with your codebase using local LLMs
+Scan, analyze files, and chat with your codebase using local LLMs (Ollama)
 
 ## ✨ Features
 
-- 🔍 **Smart File Scanning** - Respects .gitignore, follows symlinks, enforces depth limits
-- 🛡️ **Security-Aware** - Detects and sanitizes secrets/PII before sending to LLM
-- 🤖 **LLM Analysis** - Works with Ollama (local) - analyze code, documents, books, medical records, etc.
-- 💬 **Interactive Mode** - Chat with your files using a beautiful TUI with live rescan
-- 🔒 **Privacy First** - All scanning happens locally, you control what's sent to LLM
-- 📊 **Token Management** - Automatic batching for large projects, handles long lines
-- 💾 **Auto-Save Results** - Analysis saved to temp file for easy review
-- 🎯 **Action-Oriented** - LLM provides concrete fixes and code snippets in fenced blocks
-
+- 🔍 Smart file scanning with .gitignore support and automatic batching
+- 🛡️ Security-aware - detects and sanitizes secrets/PII before LLM submission
+- 💬 Interactive mode with live rescan capability
+- ⚡ Concurrent batch processing for large projects
+- 💾 Auto-save results with `--view-last` support
+- 🔒 Privacy-first - all processing happens locally
 
 ## 🚀 Quick Start
 
-```bash
-# make
-$ make
-Available targets:
-  make build         - Build binary for current platform
-  make build-macos   - Build binary for macOS (arm64 and amd64)
-  make build-linux   - Build binary for Linux (amd64 and arm64)
-  make all           - Clean and build for current platform
-  make clean         - Remove build artifacts
-  make test          - Run tests
-  make fmt           - Format code
-  make vet           - Run go vet
-```
+**Prerequisites:** Install and configure Ollama (see [Ollama Setup](#-ollama-setup) for recommended settings)
 
 ```bash
 # Build
 make build
-or
-go build -o local-agent
 
-# Analyze a directory (STANDARD mode)
+# Standard analysis
 ./local-agent -dir ./myproject -task "find security issues"
 
-# INTERACTIVE mode
+# Interactive mode
 ./local-agent -dir ./myproject --interactive
 
-# View last analysis
-./local-agent --view-last
+# Other commands
+./local-agent --view-last      # View previous results
+./local-agent --health         # Check LLM connection
+./local-agent --list-models    # Show available models
 ```
 
 ## 📋 Usage
 
-### Standard Analysis
+### Standard Mode
 ```bash
-# Basic analysis
-./local-agent -dir /path/to/code -task "your task here"
-
-# Examples:
-./local-agent -dir . -task "find all TODO comments"
-./local-agent -dir ./src -task "list security vulnerabilities"
-./local-agent -dir . -task "explain the architecture"
-
-# Use different model
-./local-agent -dir . -task "code review" --model codellama
-
-# View results later
-./local-agent --view-last
+./local-agent -dir . -task "find security issues"
+./local-agent -dir . -task "explain the architecture" --model codellama
 ```
 
 ### Interactive Mode
@@ -75,119 +44,57 @@ go build -o local-agent
 ./local-agent -dir ./myproject --interactive
 ```
 
-**Available commands:**
-- `help` - Show help
-- `model <name>` - Switch to different model (e.g., `model codellama`)
-- `rescan` - Re-scan directory for new/changed files
-- `stats` - Scan statistics
-- `files` - List scanned files
-- `last` - View previous analysis
-- `clear` - Clear history
-- `quit` - Exit
+**Commands:** `help`, `model <name>`, `rescan`, `stats`, `files`, `last`, `clear`, `quit`
 
-**Ask questions naturally:**
+**Navigation:** `↑/↓` scroll, `Enter` send
+
+**Examples:**
 - "Find all TODO comments"
-- "What are the main components?"
 - "Explain main.go"
-- "Show me the configuration for GKE" (provides exact code)
-- "Analyze these medical records for patterns"
+- "model codellama" (switch models on the fly)
+- "Fix security issues in auth.go"
 
-**Request code changes:**
-- "Analyze main.go file and show me new code with applied suggestions"
-- "Fix the security issues in auth.go"
-- "Refactor this function to be more readable"
+## 🔧 Ollama Setup
 
-**Switch models on the fly:**
-```
-> model codellama
-✅ Model switched: wizardlm2:7b → codellama
-
-> find security issues
-[analysis with codellama...]
-
-> model mistral
-✅ Model switched: codellama → mistral
-```
-
-**Navigation:**
-- `↑` Scroll up
-- `↓` Scroll down
-- `Enter` Send message
-
-### Other Commands
 ```bash
-./local-agent -health                    # Check LLM connection
-./local-agent -list-models               # Show available models
-./local-agent -dry-run -dir .            # Preview files (no analysis)
-./local-agent -version                   # Show version
-./local-agent --model <name> -dir . -task "analyze"  # Use specific model
+# Install & start
+curl https://ollama.ai/install.sh | sh
+
+# Start with recommended settings for local-agent
+# Match OLLAMA_CONTEXT_LENGTH with your AGENT_TOKEN_LIMIT
+# Match OLLAMA_NUM_PARALLEL with your AGENT_CONCURRENT_FILES
+OLLAMA_CONTEXT_LENGTH=8192 OLLAMA_NUM_PARALLEL=5 ollama serve
+
+# Set token limit and concurrent files without config file
+AGENT_TOKEN_LIMIT=8000 AGENT_CONCURRENT_FILES=5 ./local-agent -dir . -task "..."
+# Default values if not set:
+# AGENT_TOKEN_LIMIT=4000
+# AGENT_CONCURRENT_FILES=1
+
+# Or use defaults (context=4096, parallel=1)
+ollama serve
 ```
 
 ## 📁 File Filtering
 
-The agent filters files based on patterns defined in [config/config.go](config/config.go). By default:
+Default filters in [config/config.go](config/config.go): supports common source files (`.go`, `.js`, `.py`, etc.), configs (`.yaml`, `.json`), and docs (`.md`, `.txt`). Excludes `node_modules`, `.git`, `.env*`, build artifacts.
 
-### ✅ Allowed File Types
-
-| Category | Extensions | Description |
-|----------|-----------|-------------|
-| **Go** | `*.go` | Go source files |
-| **JavaScript/TypeScript** | `*.js`, `*.ts` | JavaScript and TypeScript files |
-| **Python** | `*.py` | Python scripts |
-| **Java** | `*.java` | Java source files |
-| **C/C++** | `*.c`, `*.cpp`, `*.h` | C and C++ source and header files |
-| **Rust** | `*.rs` | Rust source files |
-| **Ruby** | `*.rb` | Ruby scripts |
-| **PHP** | `*.php` | PHP files |
-| **Swift** | `*.swift` | Swift source files |
-| **Kotlin** | `*.kt` | Kotlin files |
-| **Scala** | `*.scala` | Scala files |
-| **Shell** | `*.sh` | Shell scripts |
-| **Configuration** | `*.yaml`, `*.yml`, `*.json`, `*.tf` | YAML, JSON, Terraform files |
-| **Documentation** | `*.md`, `*.txt` | Markdown and text files |
-| **Logs** | `*.log` | Log files |
-
-### ❌ Denied Patterns (Always Excluded)
-
-| Pattern | Description |
-|---------|-------------|
-| `node_modules/**` | Node.js dependencies |
-| `.git/**` | Git repository data |
-| `dist/**` | Distribution/build output |
-| `build/**` | Build artifacts |
-| `vendor/**` | Vendor dependencies |
-| `*.tmp` | Temporary files |
-| `.env*` | Environment files (sensitive) |
-| `*.key`, `*.pem`, `*.crt` | Cryptographic keys and certificates |
-
-### 🔧 Custom Filters
-
-You can override these defaults in `.agent/config.yaml`:
-
+Customize in `.agent/config.yaml`:
 ```yaml
 filters:
-  respect_gitignore: true    # Also respect .gitignore rules
-  custom_ignore_file: ".agentignore"  # Custom ignore file
-  deny_patterns:
-    - "node_modules/**"
-    - ".git/**"
-    - "*.log"
-  allow_patterns:
-    - "*.go"
-    - "*.js"
-    - "*.md"
+  respect_gitignore: true
+  deny_patterns: ["node_modules/**", "*.log"]
+  allow_patterns: ["*.go", "*.js"]  # If set, only these are included
 ```
 
-**Note:** If `allow_patterns` is specified, **only** files matching those patterns will be included (unless explicitly denied).
-
-## ⚙️ Configuration
+### Configuration File
 
 Create `.agent/config.yaml`:
 
 ```yaml
 agent:
-  token_limit: 32000      # Increase for local LLMs (default: 8000)
-  concurrent_files: 10
+  token_limit: 4000     # Max tokens per request (adjust based on OLLAMA_CONTEXT_LENGTH)
+  concurrent_files: 10  # Number of concurrent batch requests to Ollama
 
 llm:
   provider: "ollama"
@@ -207,94 +114,37 @@ filters:
     - "*.md"
 
 security:
-  detect_secrets: true    # Scans for secrets/PII and sanitizes
+  detect_secrets: false   # Disabled by default (prevents false positives on docs)
   skip_binaries: true
-  follow_symlinks: true   # Follow symlinks during scan
-  max_depth: 20           # Maximum directory depth
-```
-
-## 🔧 Setup with Ollama
-
-```bash
-# Install Ollama
-curl https://ollama.ai/install.sh | sh
-
-# Start Ollama
-ollama serve
-
-# Pull models
-ollama pull wizardlm2:7b    # Default model
-ollama pull codellama       # Code-focused
-ollama pull mistral         # Fast general model
-
-# Use default model (wizardlm2:7b)
-./local-agent -dir . -task "analyze code"
-
-# Standard mode: specify model with flag
-./local-agent -dir . -task "analyze code" --model codellama
-
-# Interactive mode: switch models anytime with 'model <name>' command
-./local-agent -dir . --interactive
-> model codellama
-> analyze this code
-```
-
-## 🏗️ Architecture
-
-```
-CLI → Scanner → Analyzer → LLM Client
-         ↓         ↓
-      Filters   Chunker
-```
-
-- **Scanner**: Walks directories, filters files
-- **Analyzer**: Processes files by size (small/medium/large)
-- **LLM Client**: Sends context to LLM, handles responses
-- **TUI**: Interactive chat interface (optional)
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design.
-
-## 📦 Project Structure
-
-```
-local-agent/
-├── main.go              # CLI entry point
-├── config/              # Configuration
-├── filter/              # File filtering
-├── analyzer/            # File analysis
-├── llm/                 # LLM client
-├── tui/                 # Interactive mode
-├── types/               # Shared types
-└── security/            # Validation
-```
-
-## 💡 Tips
-
-**Use rescan in interactive mode:**
-```bash
-./local-agent -dir . --interactive
-> rescan  # Pick up new/changed files without restarting
-```
-
-**Analyze any document type:**
-```bash
-# Not just code - analyze books, medical records, calculations, etc.
-./local-agent -dir ./documents -task "summarize these medical reports"
-./local-agent -dir ./research -task "extract key findings from these papers"
-```
-
-**Request exact code snippets:**
-```bash
-# LLM will provide literal content in fenced markdown blocks
-./local-agent -dir . -task "show me the configuration for database setup"
-./local-agent -dir . -task "copy paste the authentication middleware code"
+  follow_symlinks: false
+  max_depth: 20
 ```
 
 **Increase token limit for local LLMs:**
 ```yaml
 agent:
-  token_limit: 32000  # Default is 8000
+  token_limit: 32000  # Default is 24000
+  # Verify model's context window size and set accordingly
 ```
+
+**Speed up analysis with concurrent processing:**
+```yaml
+agent:
+  concurrent_files: 10  # Number of concurrent batch requests (default: 10)
+  # Set to 1 for sequential processing
+  # Higher values = faster but more resource usage
+```
+- **1**: Sequential processing (safest, lowest resource usage)
+- **5-10**: Balanced (recommended for most systems)
+- **15-20**: Aggressive (requires powerful machine and Ollama parallel support)
+
+**Important:** Match Ollama's parallel processing capacity:
+```bash
+# Enable Ollama to process multiple requests simultaneously
+export OLLAMA_NUM_PARALLEL=10  # Match your concurrent_files setting
+ollama serve
+```
+Without `OLLAMA_NUM_PARALLEL`, Ollama processes requests sequentially (queues extras). Effective speedup = **min(concurrent_files, OLLAMA_NUM_PARALLEL)**.
 
 **Adjust temperature for different tasks:**
 ```yaml
@@ -305,53 +155,8 @@ llm:
 ```
 - **0.0-0.3**: Best for code analysis, security audits, bug finding (deterministic)
 - **0.4-0.7**: Good for documentation, explanations, suggestions (balanced)
-- **0.8-1.0**: Creative tasks, brainstorming (more varied, less predictable)
-
-**Review analysis later:**
-```bash
-./local-agent -dir . -task "audit"
-# ... results displayed ...
-
-# View again later
-./local-agent --view-last
-# or in interactive mode: type 'last'
-```
-
-**Large projects:**
-- Agent automatically batches files if they exceed token limit
-- Adjust `token_limit` based on your model's context window
-- Use filters to focus on specific file types
-- Scanner handles long-line files (minified code, etc.) up to 1MB per line
-
-**Security & Privacy:**
-- Files flagged as sensitive are automatically skipped or redacted
-- Secrets/PII detected and sanitized before LLM submission
-- All violations logged in scan results
-
-## 📝 Example Workflows
-
-**Security Audit:**
-```bash
-./local-agent -dir . -task "find security vulnerabilities"
-```
-
-**Documentation:**
-```bash
-./local-agent -dir ./src -task "generate API documentation"
-```
-
-**Code Review:**
-```bash
-./local-agent --interactive -dir .
-> explain the authentication flow
-> find potential bugs in auth.go
-> suggest improvements with code examples
-> rescan  # After making changes
-> verify the fixes work correctly
-```
-
-**Extract Configuration:**
-```bash
-./local-agent -dir ./infra -task "show me the Terraform block for GKE configuration"
-# Returns exact literal config in fenced code blocks
-```
+- **Concurrent processing**: Set `concurrent_files: 4-10` and match with `OLLAMA_NUM_PARALLEL`
+- **Large projects**: Auto-batching handles projects exceeding token limit
+- **Security**: Secrets/PII automatically detected and sanitized
+- **Rescan**: Use `rescan` in interactive mode after code changes
+- **View later**: `./local-agent --view-last` or type `last` in interactive mode

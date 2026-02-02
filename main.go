@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"local-agent/analyzer"
@@ -24,12 +25,13 @@ const version = "0.1.0"
 func main() {
 	// Define CLI flags
 	var (
-		configPath = flag.String("config", "", "Path to configuration file")
-		task       = flag.String("task", "", "Analysis task description")
-		directory  = flag.String("dir", ".", "Directory to analyze")
-		model      = flag.String("model", "", "LLM model to use (overrides config)")
-		dryRun     = flag.Bool("dry-run", false, "List files without analyzing")
-		viewLast   = flag.Bool("view-last", false, "View the last saved analysis")
+		configPath      = flag.String("config", "", "Path to configuration file")
+		task            = flag.String("task", "", "Analysis task description")
+		directory       = flag.String("dir", ".", "Directory to analyze")
+		model           = flag.String("model", "", "LLM model to use (overrides config)")
+		dryRun          = flag.Bool("dry-run", false, "List files without analyzing")
+		viewLast        = flag.Bool("view-last", false, "View the last saved analysis")
+		noDetectSecrets = flag.Bool("no-detect-secrets", false, "Disable secret/sensitive content detection")
 
 		showVersion = flag.Bool("version", false, "Show version")
 		checkHealth = flag.Bool("health", false, "Check LLM connectivity")
@@ -61,6 +63,11 @@ func main() {
 	// Override model if specified via flag
 	if *model != "" {
 		cfg.LLM.Model = *model
+	}
+
+	// Override secret detection if disabled via flag
+	if *noDetectSecrets {
+		cfg.Security.DetectSecrets = false
 	}
 
 	// Initialize LLM client
@@ -99,7 +106,11 @@ func main() {
 	// Run agent
 	fmt.Printf("🔍 Local Agent v%s\n", version)
 	fmt.Printf("📁 Analyzing directory: %s\n", absDir)
-	fmt.Printf("🤖 LLM: %s @ %s\n\n", cfg.LLM.Model, cfg.LLM.Endpoint)
+	fmt.Printf("🤖 LLM: %s @ %s\n", cfg.LLM.Model, cfg.LLM.Endpoint)
+	fmt.Printf("⚙️ Configuration:\n")
+	fmt.Printf("   Token Limit: %d\n", cfg.Agent.TokenLimit)
+	fmt.Printf("   Concurrent Files: %d\n", cfg.Agent.ConcurrentFiles)
+	fmt.Printf("   Temperature: %.2f\n\n", cfg.LLM.Temperature)
 
 	// Scan files
 	result, err := scanDirectory(absDir, cfg)
@@ -278,103 +289,244 @@ func analyzeFiles(scanResult *types.ScanResult, task string, cfg *config.Config,
 		fileInfoPtrs[i] = &scanResult.Files[i]
 	}
 
-	// Check if we need to batch process
-	totalTokens := 0
-	for _, file := range fileInfoPtrs {
-		if file != nil && file.IsReadable && !file.IsSensitive {
-			totalTokens += file.TokenCount
-		}
-	}
-
-	// If total tokens exceed limit, process in batches
-	if totalTokens > cfg.Agent.TokenLimit {
-		return analyzeBatches(fileInfoPtrs, task, cfg, llmClient, analyzer)
-	}
-
-	// Process all files at once
-	content := analyzer.PrepareForLLM(fileInfoPtrs, cfg.Agent.TokenLimit)
-
-	// Send to LLM
-	response, err := llmClient.Analyze(task, content, cfg.LLM.Temperature)
-	if err != nil {
-		return nil, fmt.Errorf("LLM analysis failed: %w", err)
-	}
-
-	return response, nil
+	// Always process files individually (one request per file)
+	return analyzeBatches(fileInfoPtrs, task, cfg, llmClient, analyzer)
 }
 
 func analyzeBatches(files []*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzer *analyzer.Analyzer) (*types.AnalysisResponse, error) {
-	var allResponses []string
-	var totalTokens int
-	var totalDuration time.Duration
-	model := ""
+	fmt.Printf("\n📦 Processing files individually (one request per file)\n")
 
-	fmt.Printf("\n📦 Processing files in batches (too many files for single analysis)\n")
+	// Prepare batches (one file per batch)
+	batches := prepareBatches(files, cfg.Agent.TokenLimit)
+	totalBatches := len(batches)
 
-	currentBatch := make([]*types.FileInfo, 0)
-	currentTokens := 0
-	batchNum := 1
+	if totalBatches == 0 {
+		return &types.AnalysisResponse{
+			Response: "No files to analyze",
+			Model:    cfg.LLM.Model,
+		}, nil
+	}
+
+	fmt.Printf("   Processing %d files\n", totalBatches)
+
+	// Determine concurrency level
+	maxConcurrent := cfg.Agent.ConcurrentFiles
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+
+	// If only 1 worker or 1 file, process sequentially
+	if maxConcurrent == 1 || totalBatches == 1 {
+		return processSequentially(batches, task, cfg, llmClient, analyzer)
+	}
+
+	fmt.Printf("   Using %d concurrent workers\n", maxConcurrent)
+
+	// Process batches concurrently
+	return processConcurrently(batches, task, cfg, llmClient, analyzer, maxConcurrent)
+}
+
+// prepareBatches creates one batch per file for individual processing
+// Filters out files that exceed token limit
+func prepareBatches(files []*types.FileInfo, tokenLimit int) [][]*types.FileInfo {
+	var batches [][]*types.FileInfo
 
 	for _, file := range files {
 		if file == nil || !file.IsReadable {
 			continue
 		}
 
-		// If adding this file exceeds token limit, process current batch
-		if currentTokens+file.TokenCount > cfg.Agent.TokenLimit && len(currentBatch) > 0 {
-			fmt.Printf("   Processing batch %d (%d files)...\n", batchNum, len(currentBatch))
-			response, err := processBatch(currentBatch, task, cfg, llmClient, analyzer)
-			if err != nil {
-				fmt.Printf("   ⚠️  Batch %d failed: %v\n", batchNum, err)
-			} else {
-				allResponses = append(allResponses, fmt.Sprintf("\n=== Batch %d ===%s", batchNum, response.Response))
-				totalTokens += response.TokensUsed
-				totalDuration += response.Duration
-				if model == "" {
-					model = response.Model
-				}
-			}
-
-			// Reset for next batch
-			currentBatch = make([]*types.FileInfo, 0)
-			currentTokens = 0
-			batchNum++
+		// Skip files that exceed token limit
+		if file.TokenCount > tokenLimit {
+			fmt.Printf("   ⚠️  Skipping %s (%d tokens exceeds limit of %d)\n",
+				file.RelPath, file.TokenCount, tokenLimit)
+			continue
 		}
 
-		currentBatch = append(currentBatch, file)
-		currentTokens += file.TokenCount
+		// Each file is its own batch
+		batches = append(batches, []*types.FileInfo{file})
 	}
 
-	// Process remaining batch
-	if len(currentBatch) > 0 {
-		fmt.Printf("   Processing batch %d (%d files)...\n", batchNum, len(currentBatch))
-		response, err := processBatch(currentBatch, task, cfg, llmClient, analyzer)
+	return batches
+}
+
+// processSequentially processes files one at a time
+func processSequentially(batches [][]*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzer *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+	var allResponses []string
+	var totalTokens int
+	var totalDuration time.Duration
+	model := ""
+
+	for i, batch := range batches {
+		fileNum := i + 1
+		fileName := batch[0].RelPath // Each batch has one file
+		fmt.Printf("   Processing file %d/%d: %s\n", fileNum, len(batches), fileName)
+
+		response, err := processBatch(batch, task, cfg, llmClient, analyzer)
 		if err != nil {
-			fmt.Printf("   ⚠️  Batch %d failed: %v\n", batchNum, err)
+			fmt.Printf("   ⚠️  File %d (%s) failed: %v\n", fileNum, fileName, err)
+			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v", fileName, err))
 		} else {
-			allResponses = append(allResponses, fmt.Sprintf("\n=== Batch %d ===%s", batchNum, response.Response))
+			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===%s", fileName, response.Response))
 			totalTokens += response.TokensUsed
 			totalDuration += response.Duration
 			if model == "" {
 				model = response.Model
 			}
+			fmt.Printf("   ✅ File %d completed\n", fileNum)
 		}
 	}
 
-	// Aggregate results
-	aggregatedResponse := &types.AnalysisResponse{
+	return &types.AnalysisResponse{
 		Response:   strings.Join(allResponses, "\n"),
 		Model:      model,
 		TokensUsed: totalTokens,
 		Duration:   totalDuration,
+	}, nil
+}
+
+// batchJob represents a batch processing job
+type batchJob struct {
+	batchNum int
+	batch    []*types.FileInfo
+}
+
+// batchResult represents the result of processing a batch
+type batchResult struct {
+	batchNum int
+	response *types.AnalysisResponse
+	err      error
+}
+
+// processConcurrently processes batches concurrently using worker pool
+func processConcurrently(batches [][]*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzer *analyzer.Analyzer, maxWorkers int) (*types.AnalysisResponse, error) {
+	totalFiles := len(batches)
+
+	// Create channels
+	jobs := make(chan batchJob, totalFiles)
+	results := make(chan batchResult, totalFiles)
+
+	// Build filename map
+	fileNames := make(map[int]string)
+	for i, batch := range batches {
+		fileNames[i+1] = batch[0].RelPath
 	}
 
-	return aggregatedResponse, nil
+	// Start worker pool
+	var wg sync.WaitGroup
+	for w := 1; w <= maxWorkers; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for job := range jobs {
+				fileName := fileNames[job.batchNum]
+				fmt.Printf("   [Worker %d] Processing file %d/%d: %s\n",
+					workerID, job.batchNum, totalFiles, fileName)
+
+				response, err := processBatch(job.batch, task, cfg, llmClient, analyzer)
+				results <- batchResult{
+					batchNum: job.batchNum,
+					response: response,
+					err:      err,
+				}
+			}
+		}(w)
+	}
+
+	// Send jobs to workers
+	for i, batch := range batches {
+		jobs <- batchJob{
+			batchNum: i + 1,
+			batch:    batch,
+		}
+	}
+	close(jobs)
+
+	// Wait for all workers to finish in background
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results
+	fileResults := make(map[int]*types.AnalysisResponse)
+	fileTokens := make(map[string]int) // Track tokens per file
+	var totalTokens int
+	var totalDuration time.Duration
+	model := ""
+	failedFiles := make(map[int]error)
+
+	for result := range results {
+		fileName := fileNames[result.batchNum]
+		if result.err != nil {
+			fmt.Printf("   ⚠️  File %s failed: %v\n", fileName, result.err)
+			failedFiles[result.batchNum] = result.err
+		} else {
+			fileResults[result.batchNum] = result.response
+			fileTokens[fileName] = result.response.TokensUsed
+			totalTokens += result.response.TokensUsed
+			totalDuration += result.response.Duration
+			if model == "" {
+				model = result.response.Model
+			}
+			fmt.Printf("   ✅ File %s completed\n", fileName)
+		}
+	}
+
+	// Aggregate results in order, including failed files
+	var allResponses []string
+	for i := 1; i <= totalFiles; i++ {
+		fileName := fileNames[i]
+		if response, ok := fileResults[i]; ok {
+			// Successful file
+			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===%s", fileName, response.Response))
+		} else if err, failed := failedFiles[i]; failed {
+			// Failed file - include error message
+			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v", fileName, err))
+		}
+	}
+
+	// Add summary of failures if any
+	var responseText string
+	if len(failedFiles) > 0 {
+		responseText = fmt.Sprintf("⚠️  Warning: %d of %d files failed (see details below)\n", len(failedFiles), totalFiles)
+		responseText += strings.Join(allResponses, "\n")
+	} else {
+		responseText = strings.Join(allResponses, "\n")
+	}
+
+	return &types.AnalysisResponse{
+		Response:   responseText,
+		Model:      model,
+		TokensUsed: totalTokens,
+		FileTokens: fileTokens,
+		Duration:   totalDuration,
+	}, nil
 }
 
 func processBatch(batch []*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzer *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+	// Show file info being processed
+	for _, file := range batch {
+		if file != nil {
+			fmt.Printf("   [INFO] File: %s, Tokens: %d, Content length: %d bytes, IsReadable: %v\n",
+				file.RelPath, file.TokenCount, len(file.Content), file.IsReadable)
+		}
+	}
+
 	content := analyzer.PrepareForLLM(batch, cfg.Agent.TokenLimit)
-	return llmClient.Analyze(task, content, cfg.LLM.Temperature)
+
+	// Check if we have any actual content to analyze
+	if len(content) < 100 { // Less than 100 bytes means essentially empty (just headers)
+		return nil, fmt.Errorf("no valid content to analyze after PrepareForLLM")
+	}
+
+	// For single file batches, add filename to task for clarity
+	actualTask := task
+	if len(batch) == 1 && batch[0] != nil {
+		actualTask = fmt.Sprintf("Analyze the file '%s'. %s", batch[0].RelPath, task)
+	}
+
+	return llmClient.Analyze(actualTask, content, cfg.LLM.Temperature)
 }
 
 func displayScanResult(result *types.ScanResult) {
@@ -401,9 +553,15 @@ func displayScanResult(result *types.ScanResult) {
 
 func displayAnalysisResult(result *types.AnalysisResponse) {
 	fmt.Printf("🎯 Analysis Complete\n")
-	fmt.Printf("   Model: %s\n", result.Model)
-	fmt.Printf("   Tokens used: %d\n", result.TokensUsed)
-	fmt.Printf("   Duration: %v\n\n", result.Duration)
+	fmt.Printf("   Total duration: %v\n", result.Duration)
+
+	if len(result.FileTokens) > 0 {
+		fmt.Printf("\n   📊 Token usage per file:\n")
+		for file, tokens := range result.FileTokens {
+			fmt.Printf("      %s: %d tokens\n", file, tokens)
+		}
+	}
+	fmt.Printf("\n")
 
 	fmt.Printf("📝 Response:\n")
 	fmt.Printf("%s\n", result.Response)

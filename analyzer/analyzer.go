@@ -41,7 +41,7 @@ func (a *Analyzer) AnalyzeFile(path string, rootPath string) (*types.FileInfo, e
 	}
 
 	// Mark obviously sensitive paths early
-	if a.validator.DetectSensitiveFile(path) {
+	if a.config.Security.DetectSecrets && a.validator.DetectSensitiveFile(path) {
 		info.IsSensitive = true
 	}
 
@@ -175,9 +175,9 @@ func (a *Analyzer) generateSummary(info *types.FileInfo) string {
 }
 
 // PrepareForLLM prepares file content for sending to LLM
+// Enforces maxTokens limit by including files until limit is reached
 func (a *Analyzer) PrepareForLLM(files []*types.FileInfo, maxTokens int) string {
 	var builder strings.Builder
-	currentTokens := 0
 
 	// Redact sensitive content before sending to LLM
 	sanitize := func(text string) string {
@@ -187,45 +187,50 @@ func (a *Analyzer) PrepareForLLM(files []*types.FileInfo, maxTokens int) string 
 		return a.validator.SanitizeContent(text)
 	}
 
-	// First, create a file listing
-	var fileList []string
+	// Determine which files can fit within token limit
+	var includedFiles []*types.FileInfo
+	var skippedFiles []*types.FileInfo
+	currentTokens := 0
+
 	for _, file := range files {
-		if file != nil && file.IsReadable && !file.IsSensitive {
-			fileList = append(fileList, file.RelPath)
+		if file == nil || !file.IsReadable || file.IsSensitive {
+			continue
 		}
+
+		// Skip files that exceed token limit entirely
+		if file.TokenCount > maxTokens {
+			skippedFiles = append(skippedFiles, file)
+			continue
+		}
+
+		// Stop if adding this file would exceed limit (unless it's the first file)
+		if currentTokens+file.TokenCount > maxTokens && len(includedFiles) > 0 {
+			break
+		}
+
+		includedFiles = append(includedFiles, file)
+		currentTokens += file.TokenCount
 	}
 
 	// Add summary header
 	builder.WriteString("# Project Files Summary\n\n")
-	builder.WriteString(fmt.Sprintf("Total files to analyze: %d\n\n", len(fileList)))
+	builder.WriteString(fmt.Sprintf("Total files to analyze: %d\n\n", len(includedFiles)))
+	if len(skippedFiles) > 0 {
+		builder.WriteString(fmt.Sprintf("⚠️  Skipped %d files (exceed token limit)\n\n", len(skippedFiles)))
+	}
 	builder.WriteString("## File List:\n")
-	for _, fileName := range fileList {
-		builder.WriteString(fmt.Sprintf("- %s\n", fileName))
+	for _, file := range includedFiles {
+		builder.WriteString(fmt.Sprintf("- %s\n", file.RelPath))
 	}
 	builder.WriteString("\n---\n\n")
 	builder.WriteString("## File Contents:\n\n")
 
-	for _, file := range files {
-		if file == nil || !file.IsReadable {
-			continue
-		}
-
-		// Skip sensitive files entirely
-		if file.IsSensitive {
-			builder.WriteString(fmt.Sprintf("### File: %s\n", file.RelPath))
-			builder.WriteString("[SENSITIVE FILE - SKIPPED]\n\n")
-			continue
-		}
-
-		// Check token limit
-		if currentTokens+file.TokenCount > maxTokens {
-			builder.WriteString("\n[Remaining files omitted due to token limit]\n")
-			break
-		}
-
+	// Add content for included files only
+	for _, file := range includedFiles {
 		// Add file header
 		builder.WriteString(fmt.Sprintf("### File: %s\n", file.RelPath))
 
+		// Skip sensitive files
 		if file.IsSensitive {
 			builder.WriteString("[SENSITIVE FILE - SKIPPED]\n\n")
 			continue
@@ -237,13 +242,25 @@ func (a *Analyzer) PrepareForLLM(files []*types.FileInfo, maxTokens int) string 
 			if file.Content != "" {
 				safeContent := sanitize(file.Content)
 				builder.WriteString(fmt.Sprintf("```%s\n%s\n```\n\n", getLanguageIdentifier(file.Extension), safeContent))
-				currentTokens += file.TokenCount
+			} else {
+				builder.WriteString("[Empty file]\n\n")
 			}
 
 		case types.CategoryLarge:
-			builder.WriteString(fmt.Sprintf("[Large file - %s]\n", file.Summary))
-			builder.WriteString(fmt.Sprintf("Available chunks: %d\n", len(file.Chunks)))
-			builder.WriteString("Use chunk indices to request specific sections.\n\n")
+			// For single file analysis, include full content
+			if len(includedFiles) == 1 && file.Content != "" {
+				safeContent := sanitize(file.Content)
+				builder.WriteString(fmt.Sprintf("```%s\n%s\n```\n\n", getLanguageIdentifier(file.Extension), safeContent))
+			} else {
+				// For multi-file batches, show summary and first chunk
+				builder.WriteString(fmt.Sprintf("[Large file - %s]\n", file.Summary))
+				if len(file.Chunks) > 0 && file.Chunks[0].Content != "" {
+					safeContent := sanitize(file.Chunks[0].Content)
+					builder.WriteString(fmt.Sprintf("\n**Preview (Chunk 1/%d):**\n```%s\n%s\n```\n",
+						len(file.Chunks), getLanguageIdentifier(file.Extension), safeContent))
+				}
+			}
+			builder.WriteString("\n")
 		}
 	}
 
@@ -251,7 +268,7 @@ func (a *Analyzer) PrepareForLLM(files []*types.FileInfo, maxTokens int) string 
 }
 
 func (a *Analyzer) flagViolations(info *types.FileInfo, content string) {
-	if a.validator == nil || info == nil {
+	if a.validator == nil || info == nil || !a.config.Security.DetectSecrets {
 		return
 	}
 

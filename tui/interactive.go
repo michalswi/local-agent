@@ -463,6 +463,16 @@ func (m InteractiveModel) processQuestion(question string) tea.Cmd {
 			fileInfoPtrs[i] = &m.scanResult.Files[i]
 		}
 
+		// Count readable files and calculate what can fit
+		readableCount := 0
+		totalTokens := 0
+		for _, file := range fileInfoPtrs {
+			if file != nil && file.IsReadable && !file.IsSensitive {
+				readableCount++
+				totalTokens += file.TokenCount
+			}
+		}
+
 		// Prepare content for LLM
 		content := analyzerEngine.PrepareForLLM(fileInfoPtrs, m.cfg.Agent.TokenLimit)
 
@@ -482,6 +492,29 @@ func (m InteractiveModel) processQuestion(question string) tea.Cmd {
 		// Add metadata on separate lines for better readability
 		response.WriteString("\n\n---\n")
 		response.WriteString(fmt.Sprintf("📊 Tokens: %d  •  ⏱️  Duration: %.2fs", result.TokensUsed, result.Duration.Seconds()))
+
+		// Warn if files were excluded due to token limits
+		if totalTokens > m.cfg.Agent.TokenLimit {
+			// Count how many files were actually included
+			includedCount := 0
+			tempTokens := 0
+			for _, file := range fileInfoPtrs {
+				if file == nil || !file.IsReadable || file.IsSensitive {
+					continue
+				}
+				if tempTokens+file.TokenCount > m.cfg.Agent.TokenLimit && includedCount > 0 {
+					break
+				}
+				includedCount++
+				tempTokens += file.TokenCount
+			}
+
+			excluded := readableCount - includedCount
+			if excluded > 0 {
+				response.WriteString(fmt.Sprintf("\n\n⚠️  Note: %d of %d files excluded (token limit: %d). Consider using filters or increase token_limit in config.",
+					excluded, readableCount, m.cfg.Agent.TokenLimit))
+			}
+		}
 
 		// Save to temp file for 'last' command
 		saveAnalysisToTempFile(result, question)

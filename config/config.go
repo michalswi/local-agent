@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -60,19 +61,33 @@ type ChunkingConfig struct {
 
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
+	// Read from environment variables with defaults
+	tokenLimit := 4000
+	if val := os.Getenv("AGENT_TOKEN_LIMIT"); val != "" {
+		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
+			tokenLimit = parsed
+		}
+	}
+
+	concurrentFiles := 1
+	if val := os.Getenv("AGENT_CONCURRENT_FILES"); val != "" {
+		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
+			concurrentFiles = parsed
+		}
+	}
+
 	return &Config{
 		Agent: AgentConfig{
 			MaxFileSizeBytes: 1048576, // 1MB
-			TokenLimit:       8000,
-			ConcurrentFiles:  10,
+			ConcurrentFiles:  concurrentFiles,
+			TokenLimit:       tokenLimit,
 		},
 		LLM: LLMConfig{
-			Provider: "ollama",
-			Endpoint: "http://localhost:11434",
-			Model:    "wizardlm2:7b",
-			// Model:       "codellama",
+			Provider:    "ollama",
+			Endpoint:    "http://localhost:11434",
+			Model:       "wizardlm2:7b", // https://ollama.com/library/wizardlm2
 			Temperature: 0.1,
-			Timeout:     120,
+			Timeout:     300, // 5 minutes for large batches
 		},
 		Filters: FilterConfig{
 			RespectGitignore: true,
@@ -115,7 +130,7 @@ func DefaultConfig() *Config {
 			},
 		},
 		Security: SecurityConfig{
-			DetectSecrets:  true,
+			DetectSecrets:  false, // Disabled by default
 			SkipBinaries:   true,
 			FollowSymlinks: false,
 			MaxDepth:       20,
