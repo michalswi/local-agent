@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"local-agent/analyzer"
@@ -21,9 +22,10 @@ import (
 // InteractiveModel represents the interactive conversation mode
 type InteractiveModel struct {
 	// Conversation state
-	messages   []Message
-	input      textinput.Model
-	processing bool
+	messages           []Message
+	input              textinput.Model
+	processing         bool
+	processingProgress []string // Progress messages during processing
 
 	// Context
 	directory  string
@@ -55,6 +57,10 @@ type processCompleteMsg struct {
 	err      error
 }
 
+type processProgressMsg struct {
+	message string
+}
+
 type rescanCompleteMsg struct {
 	scanResult *types.ScanResult
 	err        error
@@ -71,8 +77,8 @@ func NewInteractiveModel(directory, model, endpoint string, scanResult *types.Sc
 	// Add welcome message
 	welcome := Message{
 		Role: "assistant",
-		Content: fmt.Sprintf("🤖 Interactive mode started!\n\nScanned: %s\nFiles found: %d\nModel: %s\n\nType your questions or commands. Type 'help' for available commands, 'quit' or 'exit' to leave.",
-			directory, scanResult.TotalFiles, model),
+		Content: fmt.Sprintf("🤖 Interactive mode started!\n\nScanned: %s\nFiles found: %d\nModel: %s\n\n🔧 Configuration:\n   Token Limit: %d\n   Concurrent Files: %d\n   Temperature: %.2f\n\nType your questions or commands. Type 'help' for available commands, 'quit' or 'exit' to leave.",
+			directory, scanResult.TotalFiles, model, cfg.Agent.TokenLimit, cfg.Agent.ConcurrentFiles, cfg.LLM.Temperature),
 		Timestamp: time.Now(),
 	}
 
@@ -135,6 +141,13 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.Reset()
 			m.processing = true
 
+			// Generate and show processing status immediately
+			fileInfoPtrs := make([]*types.FileInfo, len(m.scanResult.Files))
+			for i := range m.scanResult.Files {
+				fileInfoPtrs[i] = &m.scanResult.Files[i]
+			}
+			m.processingProgress = m.generateProcessingStatus(fileInfoPtrs)
+
 			// Process the question
 			return m, m.processQuestion(userInput)
 
@@ -154,6 +167,7 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case processCompleteMsg:
 		m.processing = false
+		m.processingProgress = nil // Clear progress messages
 		if msg.err != nil {
 			m.messages = append(m.messages, Message{
 				Role:      "assistant",
@@ -166,6 +180,16 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content:   msg.response,
 				Timestamp: time.Now(),
 			})
+		}
+		return m, nil
+
+	case processProgressMsg:
+		// Add progress message if not empty, keep last 15
+		if msg.message != "" {
+			m.processingProgress = append(m.processingProgress, msg.message)
+			if len(m.processingProgress) > 15 {
+				m.processingProgress = m.processingProgress[len(m.processingProgress)-15:]
+			}
 		}
 		return m, nil
 
@@ -221,6 +245,14 @@ func (m InteractiveModel) View() string {
 	// Input area
 	if m.processing {
 		s.WriteString(processingStyle.Render("⏳ Processing...") + "\n")
+		// Show progress messages
+		if len(m.processingProgress) > 0 {
+			s.WriteString("\n" + subtleStyle.Render("Progress:") + "\n")
+			for _, msg := range m.processingProgress {
+				s.WriteString(subtleStyle.Render("  "+msg) + "\n")
+			}
+			s.WriteString("\n") // Add space after progress messages
+		}
 	} else {
 		s.WriteString(inputLabelStyle.Render("You: ") + m.input.View() + "\n")
 	}
@@ -463,11 +495,8 @@ func (m InteractiveModel) processQuestion(question string) tea.Cmd {
 			fileInfoPtrs[i] = &m.scanResult.Files[i]
 		}
 
-		// Prepare content for LLM
-		content := analyzerEngine.PrepareForLLM(fileInfoPtrs, m.cfg.Agent.TokenLimit)
-
-		// Send to LLM
-		result, err := m.llmClient.Analyze(question, content, m.cfg.LLM.Temperature)
+		// Process files concurrently
+		result, processingInfo, err := m.analyzeBatchesForInteractive(fileInfoPtrs, question, analyzerEngine)
 		if err != nil {
 			return processCompleteMsg{
 				response: "",
@@ -475,13 +504,30 @@ func (m InteractiveModel) processQuestion(question string) tea.Cmd {
 			}
 		}
 
-		// Format response
+		// Format response with processing info
 		var response strings.Builder
+
+		// Add processing details at the top
+		if processingInfo != "" {
+			response.WriteString(processingInfo)
+			response.WriteString("\n\n")
+		}
+
 		response.WriteString(result.Response)
 
-		// Add metadata on separate lines for better readability
+		// Add metadata
 		response.WriteString("\n\n---\n")
-		response.WriteString(fmt.Sprintf("📊 Tokens: %d  •  ⏱️  Duration: %.2fs", result.TokensUsed, result.Duration.Seconds()))
+
+		// Show per-file token usage if available
+		if len(result.FileTokens) > 0 {
+			response.WriteString("📊 Token usage per file:\n")
+			for file, tokens := range result.FileTokens {
+				response.WriteString(fmt.Sprintf("   %s: %d tokens\n", file, tokens))
+			}
+			response.WriteString(fmt.Sprintf("\n⏱️  Total duration: %.2fs", result.Duration.Seconds()))
+		} else {
+			response.WriteString(fmt.Sprintf("📊 Tokens: %d  •  ⏱️  Duration: %.2fs", result.TokensUsed, result.Duration.Seconds()))
+		}
 
 		// Save to temp file for 'last' command
 		saveAnalysisToTempFile(result, question)
@@ -491,6 +537,259 @@ func (m InteractiveModel) processQuestion(question string) tea.Cmd {
 			err:      nil,
 		}
 	}
+}
+
+// Simple helper to generate progress info that will be shown in processing area
+func (m InteractiveModel) generateProcessingStatus(filesPtrs []*types.FileInfo) []string {
+	var messages []string
+	messages = append(messages, "📦 Processing files individually (one request per file)")
+
+	tokenLimit := m.cfg.Agent.TokenLimit
+	processable := 0
+	skipped := 0
+
+	for _, file := range filesPtrs {
+		if file == nil || !file.IsReadable {
+			continue
+		}
+		if file.TokenCount > tokenLimit {
+			messages = append(messages, fmt.Sprintf("⚠️  Skipping %s (%d tokens exceeds limit of %d)",
+				file.RelPath, file.TokenCount, tokenLimit))
+			skipped++
+		} else {
+			processable++
+		}
+	}
+
+	messages = append(messages, fmt.Sprintf("Processing %d files", processable))
+	if skipped > 0 {
+		messages = append(messages, fmt.Sprintf("%d files skipped (exceeds token limit)", skipped))
+	}
+
+	maxConcurrent := m.cfg.Agent.ConcurrentFiles
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+	if maxConcurrent > 1 && processable > 1 {
+		messages = append(messages, fmt.Sprintf("Using %d concurrent workers", maxConcurrent))
+	}
+
+	return messages
+}
+
+// batchJobInteractive represents a batch processing job for interactive mode
+type batchJobInteractive struct {
+	batchNum int
+	batch    []*types.FileInfo
+}
+
+// batchResultInteractive represents the result of processing a batch
+type batchResultInteractive struct {
+	batchNum int
+	response *types.AnalysisResponse
+	err      error
+}
+
+func (m InteractiveModel) analyzeBatchesForInteractive(files []*types.FileInfo, question string, analyzerEngine *analyzer.Analyzer) (*types.AnalysisResponse, string, error) {
+	var processingInfo strings.Builder
+	processingInfo.WriteString("📦 Processing files individually (one request per file)\n")
+
+	// Prepare batches (one file per batch)
+	batches := m.prepareBatchesForInteractive(files, &processingInfo)
+	totalFiles := len(batches)
+
+	if totalFiles == 0 {
+		return &types.AnalysisResponse{
+			Response: "No files to analyze",
+			Model:    m.cfg.LLM.Model,
+		}, processingInfo.String(), nil
+	}
+
+	processingInfo.WriteString(fmt.Sprintf("   Processing %d files\n", totalFiles))
+
+	// Determine concurrency level
+	maxConcurrent := m.cfg.Agent.ConcurrentFiles
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+
+	// If only 1 worker or 1 file, process sequentially
+	if maxConcurrent == 1 || totalFiles == 1 {
+		result, err := m.processSequentiallyForInteractive(batches, question, analyzerEngine)
+		return result, processingInfo.String(), err
+	}
+
+	processingInfo.WriteString(fmt.Sprintf("   Using %d concurrent workers\n", maxConcurrent))
+
+	// Process batches concurrently
+	result, err := m.processConcurrentlyForInteractive(batches, question, analyzerEngine, maxConcurrent)
+	return result, processingInfo.String(), err
+}
+
+func (m InteractiveModel) prepareBatchesForInteractive(files []*types.FileInfo, info *strings.Builder) [][]*types.FileInfo {
+	var batches [][]*types.FileInfo
+	tokenLimit := m.cfg.Agent.TokenLimit
+
+	for _, file := range files {
+		if file == nil || !file.IsReadable {
+			continue
+		}
+
+		// Skip files that exceed token limit
+		if file.TokenCount > tokenLimit {
+			info.WriteString(fmt.Sprintf("   ⚠️  Skipping %s (%d tokens exceeds limit of %d)\n",
+				file.RelPath, file.TokenCount, tokenLimit))
+			continue
+		}
+
+		// Each file is its own batch
+		batches = append(batches, []*types.FileInfo{file})
+	}
+
+	return batches
+}
+
+func (m InteractiveModel) processSequentiallyForInteractive(batches [][]*types.FileInfo, question string, analyzerEngine *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+	var allResponses []string
+	fileTokens := make(map[string]int)
+	var totalDuration time.Duration
+	model := ""
+
+	for _, batch := range batches {
+		fileName := batch[0].RelPath
+
+		response, err := m.processBatchForInteractive(batch, question, analyzerEngine)
+		if err != nil {
+			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v", fileName, err))
+		} else {
+			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===%s", fileName, response.Response))
+			fileTokens[fileName] = response.TokensUsed
+			totalDuration += response.Duration
+			if model == "" {
+				model = response.Model
+			}
+		}
+	}
+
+	return &types.AnalysisResponse{
+		Response:   strings.Join(allResponses, "\n"),
+		Model:      model,
+		FileTokens: fileTokens,
+		Duration:   totalDuration,
+	}, nil
+}
+
+func (m InteractiveModel) processConcurrentlyForInteractive(batches [][]*types.FileInfo, question string, analyzerEngine *analyzer.Analyzer, maxConcurrent int) (*types.AnalysisResponse, error) {
+	totalFiles := len(batches)
+
+	// Create file name mapping for tracking
+	fileNames := make(map[int]string)
+	for i, batch := range batches {
+		fileNames[i+1] = batch[0].RelPath
+	}
+
+	// Create job and result channels
+	jobs := make(chan batchJobInteractive, totalFiles)
+	results := make(chan batchResultInteractive, totalFiles)
+
+	// Start worker pool
+	var wg sync.WaitGroup
+	for w := 1; w <= maxConcurrent; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for job := range jobs {
+				response, err := m.processBatchForInteractive(job.batch, question, analyzerEngine)
+				results <- batchResultInteractive{
+					batchNum: job.batchNum,
+					response: response,
+					err:      err,
+				}
+			}
+		}(w)
+	}
+
+	// Send jobs to workers
+	for i, batch := range batches {
+		jobs <- batchJobInteractive{
+			batchNum: i + 1,
+			batch:    batch,
+		}
+	}
+	close(jobs)
+
+	// Wait for all workers to finish in background
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results
+	fileResults := make(map[int]*types.AnalysisResponse)
+	fileTokens := make(map[string]int)
+	var totalDuration time.Duration
+	model := ""
+	failedFiles := make(map[int]error)
+
+	for result := range results {
+		fileName := fileNames[result.batchNum]
+		if result.err != nil {
+			failedFiles[result.batchNum] = result.err
+		} else {
+			fileResults[result.batchNum] = result.response
+			fileTokens[fileName] = result.response.TokensUsed
+			totalDuration += result.response.Duration
+			if model == "" {
+				model = result.response.Model
+			}
+		}
+	}
+
+	// Aggregate results in order, including failed files
+	var allResponses []string
+	for i := 1; i <= totalFiles; i++ {
+		fileName := fileNames[i]
+		if response, ok := fileResults[i]; ok {
+			// Successful file
+			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===%s", fileName, response.Response))
+		} else if err, failed := failedFiles[i]; failed {
+			// Failed file - include error message
+			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v", fileName, err))
+		}
+	}
+
+	// Add summary of failures if any
+	var responseText string
+	if len(failedFiles) > 0 {
+		responseText = fmt.Sprintf("⚠️  Warning: %d of %d files failed (see details below)\n", len(failedFiles), totalFiles)
+		responseText += strings.Join(allResponses, "\n")
+	} else {
+		responseText = strings.Join(allResponses, "\n")
+	}
+
+	return &types.AnalysisResponse{
+		Response:   responseText,
+		Model:      model,
+		FileTokens: fileTokens,
+		Duration:   totalDuration,
+	}, nil
+}
+
+func (m InteractiveModel) processBatchForInteractive(batch []*types.FileInfo, question string, analyzerEngine *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+	content := analyzerEngine.PrepareForLLM(batch, m.cfg.Agent.TokenLimit)
+
+	// Check if we have any actual content to analyze
+	if len(content) < 100 {
+		return nil, fmt.Errorf("no valid content to analyze after PrepareForLLM")
+	}
+
+	// For single file batches, add filename to question for clarity
+	actualQuestion := question
+	if len(batch) == 1 && batch[0] != nil {
+		actualQuestion = fmt.Sprintf("Analyze the file '%s'. %s", batch[0].RelPath, question)
+	}
+
+	return m.llmClient.Analyze(actualQuestion, content, m.cfg.LLM.Temperature)
 }
 
 func (m InteractiveModel) wrapMessage(text string, width int) string {

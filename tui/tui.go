@@ -33,6 +33,9 @@ type Model struct {
 	FilesScanned int
 	TotalFiles   int
 
+	// Analysis tracking
+	AnalysisProgress []string // Recent progress messages
+
 	// Results
 	ScanResult     *types.ScanResult
 	AnalysisResult *types.AnalysisResponse
@@ -81,13 +84,14 @@ type tickMsg time.Time
 // New creates a new TUI model
 func New(directory, task, model, endpoint string) Model {
 	return Model{
-		Mode:      ViewScanning,
-		Directory: directory,
-		Task:      task,
-		Model:     model,
-		Endpoint:  endpoint,
-		tick:      time.Now(),
-		Errors:    make([]string, 0),
+		Mode:             ViewScanning,
+		Directory:        directory,
+		Task:             task,
+		Model:            model,
+		Endpoint:         endpoint,
+		tick:             time.Now(),
+		Errors:           make([]string, 0),
+		AnalysisProgress: make([]string, 0),
 	}
 }
 
@@ -127,6 +131,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case analysisProgressMsg:
 		m.Mode = ViewAnalyzing
+		m.AnalysisProgress = append(m.AnalysisProgress, msg.Message)
+		// Keep only last 10 messages
+		if len(m.AnalysisProgress) > 10 {
+			m.AnalysisProgress = m.AnalysisProgress[len(m.AnalysisProgress)-10:]
+		}
 
 	case analysisCompleteMsg:
 		m.AnalysisResult = msg.Result
@@ -253,6 +262,14 @@ func (m Model) renderAnalyzingView() string {
 	s.WriteString(labelStyle.Render("Task: ") + m.Task + "\n")
 	s.WriteString(labelStyle.Render("Model: ") + m.Model + "\n\n")
 
+	// Show recent progress messages
+	if len(m.AnalysisProgress) > 0 {
+		s.WriteString(sectionStyle.Render("Progress:") + "\n")
+		for _, msg := range m.AnalysisProgress {
+			s.WriteString(subtleStyle.Render("  "+msg) + "\n")
+		}
+	}
+
 	// Footer
 	s.WriteString("\n" + helpStyle.Render("Press q to quit"))
 
@@ -271,9 +288,16 @@ func (m Model) renderFinalView() string {
 	s.WriteString("\n\n")
 
 	// Metadata
-	s.WriteString(labelStyle.Render("Model: ") + m.AnalysisResult.Model + "\n")
-	s.WriteString(labelStyle.Render("Tokens used: ") + fmt.Sprintf("%d", m.AnalysisResult.TokensUsed) + "\n")
-	s.WriteString(labelStyle.Render("Duration: ") + m.AnalysisResult.Duration.String() + "\n\n")
+	s.WriteString(labelStyle.Render("Total duration: ") + m.AnalysisResult.Duration.String() + "\n")
+
+	// Token usage per file
+	if len(m.AnalysisResult.FileTokens) > 0 {
+		s.WriteString("\n" + sectionStyle.Render("📊 Token usage per file:") + "\n")
+		for file, tokens := range m.AnalysisResult.FileTokens {
+			s.WriteString(fmt.Sprintf("   %s: %d tokens\n", file, tokens))
+		}
+	}
+	s.WriteString("\n")
 
 	// Response
 	s.WriteString(sectionStyle.Render("📝 Response:") + "\n")

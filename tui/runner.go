@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"local-agent/analyzer"
@@ -173,6 +175,7 @@ func (r *Runner) runScan() (*types.ScanResult, error) {
 
 		if !fileFilter.ShouldInclude(current, info) {
 			result.FilteredFiles++
+			r.program.Send(SendScanProgress(result.TotalFiles, -1, fmt.Sprintf("[FILTERED] %s", current)))
 			return
 		}
 
@@ -190,8 +193,12 @@ func (r *Runner) runScan() (*types.ScanResult, error) {
 	fileInfos, errors := analyzerEngine.AnalyzeFiles(filePaths, r.model.Directory)
 
 	for i, fileInfo := range fileInfos {
-		// Send progress update
-		r.program.Send(SendScanProgress(i+1, totalFiles, filePaths[i]))
+		// Send progress update with file info
+		if fileInfo != nil {
+			r.program.Send(SendScanProgress(i+1, totalFiles, fmt.Sprintf("[INFO] File: %s, Tokens: %d, IsReadable: %v", filePaths[i], fileInfo.TokenCount, fileInfo.IsReadable)))
+		} else {
+			r.program.Send(SendScanProgress(i+1, totalFiles, filePaths[i]))
+		}
 
 		if errors[i] != nil {
 			result.Errors = append(result.Errors, types.ScanError{
@@ -224,14 +231,235 @@ func (r *Runner) runAnalysis(scanResult *types.ScanResult) (*types.AnalysisRespo
 		fileInfoPtrs[i] = &scanResult.Files[i]
 	}
 
-	// Prepare content for LLM
-	content := analyzerEngine.PrepareForLLM(fileInfoPtrs, r.cfg.Agent.TokenLimit)
+	// Always process files individually (one request per file) with concurrent workers
+	return r.analyzeBatches(fileInfoPtrs, analyzerEngine)
+}
 
-	// Send to LLM
-	response, err := r.client.Analyze(r.model.Task, content, r.cfg.LLM.Temperature)
-	if err != nil {
-		return nil, fmt.Errorf("LLM analysis failed: %w", err)
+// batchJob represents a batch processing job
+type batchJob struct {
+	batchNum int
+	batch    []*types.FileInfo
+}
+
+// batchResult represents the result of processing a batch
+type batchResult struct {
+	batchNum int
+	response *types.AnalysisResponse
+	err      error
+}
+
+func (r *Runner) analyzeBatches(files []*types.FileInfo, analyzerEngine *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+	r.program.Send(SendAnalysisProgress("📦 Processing files individually (one request per file)"))
+
+	// Prepare batches (one file per batch)
+	batches := r.prepareBatches(files)
+	totalFiles := len(batches)
+
+	if totalFiles == 0 {
+		return &types.AnalysisResponse{
+			Response: "No files to analyze",
+			Model:    r.cfg.LLM.Model,
+		}, nil
 	}
 
-	return response, nil
+	r.program.Send(SendAnalysisProgress(fmt.Sprintf("Processing %d files", totalFiles)))
+
+	// Determine concurrency level
+	maxConcurrent := r.cfg.Agent.ConcurrentFiles
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+
+	// If only 1 worker or 1 file, process sequentially
+	if maxConcurrent == 1 || totalFiles == 1 {
+		return r.processSequentially(batches, analyzerEngine)
+	}
+
+	r.program.Send(SendAnalysisProgress(fmt.Sprintf("Using %d concurrent workers", maxConcurrent)))
+
+	// Process batches concurrently
+	return r.processConcurrently(batches, analyzerEngine, maxConcurrent)
+}
+
+func (r *Runner) prepareBatches(files []*types.FileInfo) [][]*types.FileInfo {
+	var batches [][]*types.FileInfo
+	tokenLimit := r.cfg.Agent.TokenLimit
+
+	for _, file := range files {
+		if file == nil || !file.IsReadable {
+			continue
+		}
+
+		// Skip files that exceed token limit
+		if file.TokenCount > tokenLimit {
+			r.program.Send(SendAnalysisProgress(fmt.Sprintf("⚠️  Skipping %s (%d tokens exceeds limit of %d)",
+				file.RelPath, file.TokenCount, tokenLimit)))
+			continue
+		}
+
+		// Each file is its own batch
+		batches = append(batches, []*types.FileInfo{file})
+	}
+
+	return batches
+}
+
+func (r *Runner) processSequentially(batches [][]*types.FileInfo, analyzerEngine *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+	var allResponses []string
+	fileTokens := make(map[string]int)
+	var totalDuration time.Duration
+	model := ""
+
+	for i, batch := range batches {
+		fileNum := i + 1
+		fileName := batch[0].RelPath
+		r.program.Send(SendAnalysisProgress(fmt.Sprintf("Processing file %d/%d: %s", fileNum, len(batches), fileName)))
+
+		response, err := r.processBatch(batch, analyzerEngine)
+		if err != nil {
+			r.program.Send(SendAnalysisProgress(fmt.Sprintf("⚠️  File %s failed: %v", fileName, err)))
+			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v", fileName, err))
+		} else {
+			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===%s", fileName, response.Response))
+			fileTokens[fileName] = response.TokensUsed
+			totalDuration += response.Duration
+			if model == "" {
+				model = response.Model
+			}
+			r.program.Send(SendAnalysisProgress(fmt.Sprintf("✅ File %s completed", fileName)))
+		}
+	}
+
+	return &types.AnalysisResponse{
+		Response:   strings.Join(allResponses, "\n"),
+		Model:      model,
+		FileTokens: fileTokens,
+		Duration:   totalDuration,
+	}, nil
+}
+
+func (r *Runner) processConcurrently(batches [][]*types.FileInfo, analyzerEngine *analyzer.Analyzer, maxConcurrent int) (*types.AnalysisResponse, error) {
+	totalFiles := len(batches)
+
+	// Create file name mapping for tracking
+	fileNames := make(map[int]string)
+	for i, batch := range batches {
+		fileNames[i+1] = batch[0].RelPath
+	}
+
+	// Create job and result channels
+	jobs := make(chan batchJob, totalFiles)
+	results := make(chan batchResult, totalFiles)
+
+	// Start worker pool
+	var wg sync.WaitGroup
+	for w := 1; w <= maxConcurrent; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for job := range jobs {
+				fileName := fileNames[job.batchNum]
+				r.program.Send(SendAnalysisProgress(fmt.Sprintf("[Worker %d] Processing: %s", workerID, fileName)))
+
+				response, err := r.processBatch(job.batch, analyzerEngine)
+				results <- batchResult{
+					batchNum: job.batchNum,
+					response: response,
+					err:      err,
+				}
+			}
+		}(w)
+	}
+
+	// Send jobs to workers
+	for i, batch := range batches {
+		jobs <- batchJob{
+			batchNum: i + 1,
+			batch:    batch,
+		}
+	}
+	close(jobs)
+
+	// Wait for all workers to finish in background
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results
+	fileResults := make(map[int]*types.AnalysisResponse)
+	fileTokens := make(map[string]int)
+	var totalDuration time.Duration
+	model := ""
+	failedFiles := make(map[int]error)
+
+	for result := range results {
+		fileName := fileNames[result.batchNum]
+		if result.err != nil {
+			r.program.Send(SendAnalysisProgress(fmt.Sprintf("⚠️  File %s failed: %v", fileName, result.err)))
+			failedFiles[result.batchNum] = result.err
+		} else {
+			fileResults[result.batchNum] = result.response
+			fileTokens[fileName] = result.response.TokensUsed
+			totalDuration += result.response.Duration
+			if model == "" {
+				model = result.response.Model
+			}
+			r.program.Send(SendAnalysisProgress(fmt.Sprintf("✅ File %s completed", fileName)))
+		}
+	}
+
+	// Aggregate results in order, including failed files
+	var allResponses []string
+	for i := 1; i <= totalFiles; i++ {
+		fileName := fileNames[i]
+		if response, ok := fileResults[i]; ok {
+			// Successful file
+			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===%s", fileName, response.Response))
+		} else if err, failed := failedFiles[i]; failed {
+			// Failed file - include error message
+			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v", fileName, err))
+		}
+	}
+
+	// Add summary of failures if any
+	var responseText string
+	if len(failedFiles) > 0 {
+		responseText = fmt.Sprintf("⚠️  Warning: %d of %d files failed (see details below)\n", len(failedFiles), totalFiles)
+		responseText += strings.Join(allResponses, "\n")
+	} else {
+		responseText = strings.Join(allResponses, "\n")
+	}
+
+	return &types.AnalysisResponse{
+		Response:   responseText,
+		Model:      model,
+		FileTokens: fileTokens,
+		Duration:   totalDuration,
+	}, nil
+}
+
+func (r *Runner) processBatch(batch []*types.FileInfo, analyzerEngine *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+	// Show file info being processed
+	for _, file := range batch {
+		if file != nil {
+			r.program.Send(SendAnalysisProgress(fmt.Sprintf("[INFO] File: %s, Tokens: %d, Content length: %d bytes, IsReadable: %v",
+				file.RelPath, file.TokenCount, len(file.Content), file.IsReadable)))
+		}
+	}
+
+	content := analyzerEngine.PrepareForLLM(batch, r.cfg.Agent.TokenLimit)
+
+	// Check if we have any actual content to analyze
+	if len(content) < 100 {
+		return nil, fmt.Errorf("no valid content to analyze after PrepareForLLM")
+	}
+
+	// For single file batches, add filename to task for clarity
+	actualTask := r.model.Task
+	if len(batch) == 1 && batch[0] != nil {
+		actualTask = fmt.Sprintf("Analyze the file '%s'. %s", batch[0].RelPath, r.model.Task)
+	}
+
+	return r.client.Analyze(actualTask, content, r.cfg.LLM.Temperature)
 }
