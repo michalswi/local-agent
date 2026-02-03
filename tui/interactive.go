@@ -77,7 +77,7 @@ func NewInteractiveModel(directory, model, endpoint string, scanResult *types.Sc
 	// Add welcome message
 	welcome := Message{
 		Role: "assistant",
-		Content: fmt.Sprintf("🤖 Interactive mode started!\n\nScanned: %s\nFiles found: %d\nModel: %s\n\n⚙️ Configuration:\n   Token Limit: %d\n   Concurrent Files: %d\n   Temperature: %.2f\n\nType your questions or commands. Type 'help' for available commands, 'quit' or 'exit' to leave.",
+		Content: fmt.Sprintf("🤖 Interactive mode started!\n\nScanned: %s\nFiles found: %d\nModel: %s\n\n🔧 Configuration:\n   Token Limit: %d\n   Concurrent Files: %d\n   Temperature: %.2f\n\nType your questions or commands. Type 'help' for available commands, 'quit' or 'exit' to leave.",
 			directory, scanResult.TotalFiles, model, cfg.Agent.TokenLimit, cfg.Agent.ConcurrentFiles, cfg.LLM.Temperature),
 		Timestamp: time.Now(),
 	}
@@ -251,6 +251,7 @@ func (m InteractiveModel) View() string {
 			for _, msg := range m.processingProgress {
 				s.WriteString(subtleStyle.Render("  "+msg) + "\n")
 			}
+			s.WriteString("\n") // Add space after progress messages
 		}
 	} else {
 		s.WriteString(inputLabelStyle.Render("You: ") + m.input.View() + "\n")
