@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"unicode/utf8"
 
 	"local-agent/types"
+
+	"github.com/michalswi/pdf-reader/pdf"
 )
 
 // Detector detects file metadata and content
@@ -55,7 +58,7 @@ func (d *Detector) DetectFile(path string) (*types.FileInfo, error) {
 	}
 
 	fileInfo.Type = fileType
-	fileInfo.IsReadable = (fileType == types.TypeText)
+	fileInfo.IsReadable = (fileType == types.TypeText || fileType == types.TypePDF)
 
 	return fileInfo, nil
 }
@@ -108,6 +111,11 @@ func (d *Detector) detectFileType(path, ext string) (types.FileType, error) {
 		}
 	}
 
+	// Check for PDF files
+	if ext == ".pdf" {
+		return types.TypePDF, nil
+	}
+
 	// Try to detect by content
 	file, err := os.Open(path)
 	if err != nil {
@@ -139,6 +147,28 @@ func (d *Detector) detectFileType(path, ext string) (types.FileType, error) {
 	}
 
 	return types.TypeBinary, nil
+}
+
+// ReadPDFContent extracts text from a PDF file
+func (d *Detector) ReadPDFContent(path string) (string, error) {
+	f, reader, err := pdf.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to open PDF: %w", err)
+	}
+	defer f.Close()
+
+	textReader, err := reader.GetPlainText()
+	if err != nil {
+		return "", fmt.Errorf("failed to extract text from PDF: %w", err)
+	}
+
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(textReader)
+	if err != nil {
+		return "", fmt.Errorf("failed to read extracted text: %w", err)
+	}
+
+	return buf.String(), nil
 }
 
 // ReadContent reads the content of a file

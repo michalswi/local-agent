@@ -46,7 +46,6 @@ filters:
     - "*.jpg"
     - "*.png"
     - "*.gif"
-    - "*.pdf"
     
   allow_patterns:
     # Source code files

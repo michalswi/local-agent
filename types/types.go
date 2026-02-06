@@ -38,6 +38,7 @@ const (
 	TypeBinary    FileType = "binary"
 	TypeArchive   FileType = "archive"
 	TypeImage     FileType = "image"
+	TypePDF       FileType = "pdf"
 	TypeUnknown   FileType = "unknown"
 	TypeSensitive FileType = "sensitive"
 )

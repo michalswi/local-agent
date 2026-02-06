@@ -127,6 +127,7 @@ func DefaultConfig() *Config {
 				"*.kt",
 				"*.scala",
 				"*.log",
+				"*.pdf",
 			},
 		},
 		Security: SecurityConfig{

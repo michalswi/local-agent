@@ -66,7 +66,15 @@ func (a *Analyzer) AnalyzeFile(path string, rootPath string) (*types.FileInfo, e
 	switch info.Category {
 	case types.CategorySmall:
 		// Read full content
-		content, err := a.detector.ReadContent(path, 0)
+		var content string
+		var err error
+
+		if info.Type == types.TypePDF {
+			content, err = a.detector.ReadPDFContent(path)
+		} else {
+			content, err = a.detector.ReadContent(path, 0)
+		}
+
 		if err != nil {
 			return info, fmt.Errorf("failed to read content: %w", err)
 		}
@@ -76,7 +84,15 @@ func (a *Analyzer) AnalyzeFile(path string, rootPath string) (*types.FileInfo, e
 
 	case types.CategoryMedium:
 		// Read full content but prepare for chunking
-		content, err := a.detector.ReadContent(path, 0)
+		var content string
+		var err error
+
+		if info.Type == types.TypePDF {
+			content, err = a.detector.ReadPDFContent(path)
+		} else {
+			content, err = a.detector.ReadContent(path, 0)
+		}
+
 		if err != nil {
 			return info, fmt.Errorf("failed to read content: %w", err)
 		}
@@ -89,7 +105,15 @@ func (a *Analyzer) AnalyzeFile(path string, rootPath string) (*types.FileInfo, e
 
 	case types.CategoryLarge:
 		// Read full content for analysis
-		content, err := a.detector.ReadContent(path, 0)
+		var content string
+		var err error
+
+		if info.Type == types.TypePDF {
+			content, err = a.detector.ReadPDFContent(path)
+		} else {
+			content, err = a.detector.ReadContent(path, 0)
+		}
+
 		if err != nil {
 			return info, fmt.Errorf("failed to read content: %w", err)
 		}
