@@ -2,13 +2,13 @@
 
 <img src="./img/local-agent.png" alt="logo" width="120">
 
-# AI-powered code analysis tool
+# ai-powered code analysis tool
 
 [![stars](https://img.shields.io/github/stars/michalswi/local-agent?style=for-the-badge&color=353535)](https://github.com/michalswi/local-agent)
 [![forks](https://img.shields.io/github/forks/michalswi/local-agent?style=for-the-badge&color=353535)](https://github.com/michalswi/local-agent/fork)
+[![releases](https://img.shields.io/github/v/release/michalswi/local-agent?style=for-the-badge&color=353535)](https://github.com/michalswi/local-agent/releases)
 
-**local-agent**  
-is a local Go-based CLI to scan, analyze files, and chat with your codebase using local models (Ollama based)
+**local-agent** is a Go-based CLI to scan, analyze files, and chat with your codebase using local models (Ollama based)
 
 </div>
 
