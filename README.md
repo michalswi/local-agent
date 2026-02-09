@@ -46,6 +46,7 @@ Once you got familiar with [Ollama Setup](#-ollama-setup) you might try:
 OLLAMA_NUM_PARALLEL=5 ollama serve
 
 AGENT_CONCURRENT_FILES=5 ./local-agent -dir (...)
+
 AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 ```
 
@@ -54,23 +55,25 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 ### Standard Mode
 ```bash
 ./local-agent -dir . -task "find security issues"
-./local-agent -dir . -task "explain the architecture" --model codellama
+
+./local-agent -dir <full_path_to_dir> -task "explain the architecture" --model codellama
+
+./local-agent --focus ./cmd/main.go -task "review this file"
 ```
 
 ### Interactive Mode
 ```bash
-./local-agent -dir ./myproject --interactive
+./local-agent -dir . --interactive
+
+./local-agent -dir <full_path_to_dir> --interactive
 ```
 
-**Commands:** `help`, `model <name>`, `rescan`, `stats`, `files`, `last`, `clear`, `quit`
+**Commands:** `help`, `model <name>`, `rescan`, `stats`, `files`, `focus <path>`, `last`, `clear`, `quit`
 
 **Navigation:** `↑/↓` scroll, `Enter` send
 
-**Examples:**
-- "Find all TODO comments"
-- "Explain main.go"
-- "model codellama" (switch models on the fly)
-- "Fix security issues in auth.go"
+**Focus:** `focus <filename>` limits analysis to a single scanned file until you run `focus clear`.
+
 
 ## 🔧 Ollama Setup
 

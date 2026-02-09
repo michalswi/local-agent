@@ -318,9 +318,9 @@ func (r *Runner) processSequentially(batches [][]*types.FileInfo, analyzerEngine
 		response, err := r.processBatch(batch, analyzerEngine)
 		if err != nil {
 			r.program.Send(SendAnalysisProgress(fmt.Sprintf("⚠️  File %s failed: %v", fileName, err)))
-			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v", fileName, err))
+			allResponses = append(allResponses, formatFileErrorSection(fileName, err))
 		} else {
-			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===%s", fileName, response.Response))
+			allResponses = append(allResponses, formatFileSection(fileName, response.Response))
 			fileTokens[fileName] = response.TokensUsed
 			totalDuration += response.Duration
 			if model == "" {
@@ -415,10 +415,10 @@ func (r *Runner) processConcurrently(batches [][]*types.FileInfo, analyzerEngine
 		fileName := fileNames[i]
 		if response, ok := fileResults[i]; ok {
 			// Successful file
-			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===%s", fileName, response.Response))
+			allResponses = append(allResponses, formatFileSection(fileName, response.Response))
 		} else if err, failed := failedFiles[i]; failed {
 			// Failed file - include error message
-			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v", fileName, err))
+			allResponses = append(allResponses, formatFileErrorSection(fileName, err))
 		}
 	}
 
@@ -462,4 +462,20 @@ func (r *Runner) processBatch(batch []*types.FileInfo, analyzerEngine *analyzer.
 	}
 
 	return r.client.Analyze(actualTask, content, r.cfg.LLM.Temperature)
+}
+
+func formatFileSection(fileName, body string) string {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return "\n" + formatFileHeaderLine(fileName)
+	}
+	return fmt.Sprintf("\n%s\n%s", formatFileHeaderLine(fileName), trimmed)
+}
+
+func formatFileErrorSection(fileName string, err error) string {
+	return fmt.Sprintf("\n%s\n⚠️  FAILED: %v", formatFileHeaderLine(fileName), err)
+}
+
+func formatFileHeaderLine(fileName string) string {
+	return fmt.Sprintf("=== %s ===", fileName)
 }

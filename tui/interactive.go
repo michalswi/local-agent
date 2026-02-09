@@ -28,12 +28,13 @@ type InteractiveModel struct {
 	processingProgress []string // Progress messages during processing
 
 	// Context
-	directory  string
-	model      string
-	endpoint   string
-	scanResult *types.ScanResult
-	cfg        *config.Config
-	llmClient  *llm.OllamaClient
+	directory   string
+	model       string
+	endpoint    string
+	scanResult  *types.ScanResult
+	focusedPath string
+	cfg         *config.Config
+	llmClient   *llm.OllamaClient
 
 	// UI state
 	width     int
@@ -67,7 +68,7 @@ type rescanCompleteMsg struct {
 }
 
 // NewInteractiveModel creates a new interactive mode model
-func NewInteractiveModel(directory, model, endpoint string, scanResult *types.ScanResult, cfg *config.Config, llmClient *llm.OllamaClient) InteractiveModel {
+func NewInteractiveModel(directory, model, endpoint string, scanResult *types.ScanResult, cfg *config.Config, llmClient *llm.OllamaClient, focusedPath string) InteractiveModel {
 	ti := textinput.New()
 	ti.Placeholder = "Ask a question about your codebase..."
 	ti.Focus()
@@ -83,14 +84,15 @@ func NewInteractiveModel(directory, model, endpoint string, scanResult *types.Sc
 	}
 
 	return InteractiveModel{
-		messages:   []Message{welcome},
-		input:      ti,
-		directory:  directory,
-		model:      model,
-		endpoint:   endpoint,
-		scanResult: scanResult,
-		cfg:        cfg,
-		llmClient:  llmClient,
+		messages:    []Message{welcome},
+		input:       ti,
+		directory:   directory,
+		model:       model,
+		endpoint:    endpoint,
+		scanResult:  scanResult,
+		focusedPath: focusedPath,
+		cfg:         cfg,
+		llmClient:   llmClient,
 	}
 }
 
@@ -106,6 +108,11 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			m.quitting = true
+			m.messages = append(m.messages, Message{
+				Role:      "assistant",
+				Content:   "👋 Bye!",
+				Timestamp: time.Now(),
+			})
 			return m, tea.Quit
 
 		case tea.KeyEnter:
@@ -120,6 +127,7 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Handle special commands
 			if m.handleCommand(userInput) {
+				m.scrollPos = 0
 				if m.quitting {
 					return m, tea.Quit
 				}
@@ -138,18 +146,24 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Timestamp: time.Now(),
 			})
 
+			activeFiles := m.getActiveFiles()
+			if len(activeFiles) == 0 {
+				m.messages = append(m.messages, Message{
+					Role:      "assistant",
+					Content:   "⚠️  No files available for analysis. Use 'rescan' or 'focus clear' to reset your selection.",
+					Timestamp: time.Now(),
+				})
+				return m, nil
+			}
+
 			m.input.Reset()
 			m.processing = true
 
 			// Generate and show processing status immediately
-			fileInfoPtrs := make([]*types.FileInfo, len(m.scanResult.Files))
-			for i := range m.scanResult.Files {
-				fileInfoPtrs[i] = &m.scanResult.Files[i]
-			}
-			m.processingProgress = m.generateProcessingStatus(fileInfoPtrs)
+			m.processingProgress = m.generateProcessingStatus(activeFiles)
 
 			// Process the question
-			return m, m.processQuestion(userInput)
+			return m, m.processQuestion(userInput, activeFiles)
 
 		case tea.KeyUp:
 			m.scrollPos++
@@ -168,6 +182,7 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case processCompleteMsg:
 		m.processing = false
 		m.processingProgress = nil // Clear progress messages
+		m.scrollPos = 0            // Reset scroll to show latest message
 		if msg.err != nil {
 			m.messages = append(m.messages, Message{
 				Role:      "assistant",
@@ -203,9 +218,15 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		} else {
 			m.scanResult = msg.scanResult
+			var builder strings.Builder
+			builder.WriteString(fmt.Sprintf("✅ Rescan complete!\n\nFiles found: %d\nFiltered: %d\nTotal size: %s", msg.scanResult.TotalFiles, msg.scanResult.FilteredFiles, formatBytes(msg.scanResult.TotalSize)))
+			if m.focusedPath != "" && !m.focusedFileAvailable() {
+				builder.WriteString(fmt.Sprintf("\n\n🎯 The previously focused file (%s) is no longer available. Reverting to all files.", m.focusedPath))
+				m.focusedPath = ""
+			}
 			m.messages = append(m.messages, Message{
 				Role:      "assistant",
-				Content:   fmt.Sprintf("✅ Rescan complete!\n\nFiles found: %d\nFiltered: %d\nTotal size: %s", msg.scanResult.TotalFiles, msg.scanResult.FilteredFiles, formatBytes(msg.scanResult.TotalSize)),
+				Content:   builder.String(),
 				Timestamp: time.Now(),
 			})
 		}
@@ -228,7 +249,11 @@ func (m InteractiveModel) View() string {
 	var s strings.Builder
 
 	// Header
-	header := headerStyle.Render(fmt.Sprintf("🤖 Interactive Mode | %s | Files: %d", m.model, m.scanResult.TotalFiles))
+	headerText := fmt.Sprintf("🤖 Interactive Mode | %s | Files: %d", m.model, m.scanResult.TotalFiles)
+	if m.focusedPath != "" {
+		headerText += fmt.Sprintf(" | Focus: %s", m.focusedPath)
+	}
+	header := headerStyle.Render(headerText)
 	s.WriteString(header + "\n\n")
 
 	// Messages area
@@ -289,7 +314,7 @@ func (m InteractiveModel) renderMessages(maxHeight int) string {
 			content := msg.Content
 			metadata := ""
 
-			if idx := strings.Index(content, "\n\n---\n"); idx != -1 {
+			if idx := strings.LastIndex(content, "\n\n---\n"); idx != -1 {
 				metadata = strings.TrimSpace(content[idx+5:])
 				content = strings.TrimSpace(content[:idx])
 			}
@@ -297,13 +322,20 @@ func (m InteractiveModel) renderMessages(maxHeight int) string {
 			// Wrap and indent assistant message
 			wrapped := m.wrapMessage(content, m.width-6)
 			for _, line := range strings.Split(wrapped, "\n") {
-				lines = append(lines, assistantMessageStyle.Render("  "+line))
+				renderStyle := assistantMessageStyle
+				if isFileHeaderLine(line) {
+					renderStyle = fileHeaderStyle
+				}
+				lines = append(lines, renderStyle.Render("  "+line))
 			}
 
 			// Add metadata at the end if present
 			if metadata != "" {
 				lines = append(lines, "")
-				lines = append(lines, metadataStyle.Render("  "+metadata))
+				// Don't wrap metadata lines, keep them as-is
+				for _, line := range strings.Split(metadata, "\n") {
+					lines = append(lines, metadataStyle.Render("  "+line))
+				}
 			}
 		}
 
@@ -341,6 +373,11 @@ func (m *InteractiveModel) handleCommand(input string) bool {
 	switch lower {
 	case "quit", "exit", "q":
 		m.quitting = true
+		m.messages = append(m.messages, Message{
+			Role:      "assistant",
+			Content:   "👋 Bye!",
+			Timestamp: time.Now(),
+		})
 		return true
 
 	case "help", "h":
@@ -350,6 +387,7 @@ func (m *InteractiveModel) handleCommand(input string) bool {
 • rescan - Re-scan directory for new/changed files
 • stats - Show scan statistics
 • files - List scanned files
+• focus <path> - Analyze only the specified file (use 'focus clear' to reset)
 • last - View last saved analysis
 • clear - Clear conversation history
 • quit, exit, q - Exit interactive mode
@@ -457,6 +495,10 @@ File breakdown:`,
 		return true
 
 	default:
+		if strings.HasPrefix(lower, "focus") {
+			return m.handleFocusCommand(input)
+		}
+
 		// Check for model command
 		if strings.HasPrefix(lower, "model ") {
 			newModel := strings.TrimSpace(strings.TrimPrefix(lower, "model "))
@@ -484,19 +526,13 @@ File breakdown:`,
 	return false
 }
 
-func (m InteractiveModel) processQuestion(question string) tea.Cmd {
+func (m InteractiveModel) processQuestion(question string, files []*types.FileInfo) tea.Cmd {
 	return func() tea.Msg {
 		// Prepare file context for LLM
 		analyzerEngine := analyzer.NewAnalyzer(m.cfg)
 
-		// Convert []FileInfo to []*FileInfo
-		fileInfoPtrs := make([]*types.FileInfo, len(m.scanResult.Files))
-		for i := range m.scanResult.Files {
-			fileInfoPtrs[i] = &m.scanResult.Files[i]
-		}
-
 		// Process files concurrently
-		result, processingInfo, err := m.analyzeBatchesForInteractive(fileInfoPtrs, question, analyzerEngine)
+		result, processingInfo, err := m.analyzeBatchesForInteractive(files, question, analyzerEngine)
 		if err != nil {
 			return processCompleteMsg{
 				response: "",
@@ -510,13 +546,14 @@ func (m InteractiveModel) processQuestion(question string) tea.Cmd {
 		// Add processing details at the top
 		if processingInfo != "" {
 			response.WriteString(processingInfo)
-			response.WriteString("\n\n")
+			response.WriteString("\n")
 		}
 
 		response.WriteString(result.Response)
 
-		// Add metadata
-		response.WriteString("\n\n---\n")
+		// Add metadata with proper spacing
+		response.WriteString("\n\n")
+		response.WriteString("---\n")
 
 		// Show per-file token usage if available
 		if len(result.FileTokens) > 0 {
@@ -575,6 +612,139 @@ func (m InteractiveModel) generateProcessingStatus(filesPtrs []*types.FileInfo) 
 	}
 
 	return messages
+}
+
+func (m *InteractiveModel) getActiveFiles() []*types.FileInfo {
+	if m.scanResult == nil {
+		return nil
+	}
+
+	if m.focusedPath == "" {
+		files := make([]*types.FileInfo, 0, len(m.scanResult.Files))
+		for i := range m.scanResult.Files {
+			files = append(files, &m.scanResult.Files[i])
+		}
+		return files
+	}
+
+	focusPath := normalizePath(m.focusedPath)
+	for i := range m.scanResult.Files {
+		if normalizePath(m.scanResult.Files[i].RelPath) == focusPath {
+			return []*types.FileInfo{&m.scanResult.Files[i]}
+		}
+	}
+
+	return nil
+}
+
+func (m *InteractiveModel) resolveFocusTarget(query string) (string, string) {
+	if m.scanResult == nil {
+		return "", "⚠️  No scan data available. Run 'rescan' first."
+	}
+
+	normalizedQuery := normalizePath(query)
+	for _, file := range m.scanResult.Files {
+		if normalizePath(file.RelPath) == normalizedQuery {
+			return file.RelPath, ""
+		}
+	}
+
+	base := strings.ToLower(filepath.Base(normalizedQuery))
+	var matches []string
+	for _, file := range m.scanResult.Files {
+		if strings.ToLower(filepath.Base(file.RelPath)) == base {
+			matches = append(matches, file.RelPath)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", fmt.Sprintf("⚠️  Could not find a file matching %q. Use 'files' to list available files.", query)
+	case 1:
+		return matches[0], ""
+	default:
+		return "", fmt.Sprintf("⚠️  Multiple files match %q:\n   %s\nPlease provide a more specific path.", query, strings.Join(matches, "\n   "))
+	}
+}
+
+func (m *InteractiveModel) handleFocusCommand(input string) bool {
+	arg := ""
+	if len(input) >= 5 {
+		arg = strings.TrimSpace(input[5:])
+	}
+
+	if arg == "" {
+		var msg string
+		if m.focusedPath == "" {
+			msg = "🎯 No focused file. All files will be analyzed."
+		} else {
+			msg = fmt.Sprintf("🎯 Currently focusing on %s. Use 'focus clear' to analyze all files.", m.focusedPath)
+		}
+		m.messages = append(m.messages, Message{
+			Role:      "assistant",
+			Content:   msg,
+			Timestamp: time.Now(),
+		})
+		return true
+	}
+
+	if strings.EqualFold(arg, "clear") || strings.EqualFold(arg, "all") || strings.EqualFold(arg, "reset") {
+		if m.focusedPath == "" {
+			m.messages = append(m.messages, Message{
+				Role:      "assistant",
+				Content:   "🎯 Focus already cleared. Analyzing all files.",
+				Timestamp: time.Now(),
+			})
+		} else {
+			cleared := m.focusedPath
+			m.focusedPath = ""
+			m.messages = append(m.messages, Message{
+				Role:      "assistant",
+				Content:   fmt.Sprintf("🎯 Focus on %s cleared. Future questions will analyze all files.", cleared),
+				Timestamp: time.Now(),
+			})
+		}
+		return true
+	}
+
+	matchedPath, errMsg := m.resolveFocusTarget(arg)
+	if errMsg != "" {
+		m.messages = append(m.messages, Message{
+			Role:      "assistant",
+			Content:   errMsg,
+			Timestamp: time.Now(),
+		})
+		return true
+	}
+
+	m.focusedPath = matchedPath
+	m.messages = append(m.messages, Message{
+		Role:      "assistant",
+		Content:   fmt.Sprintf("🎯 Focus set to %s. Only this file will be analyzed until you run 'focus clear'.", matchedPath),
+		Timestamp: time.Now(),
+	})
+	return true
+}
+
+func (m *InteractiveModel) focusedFileAvailable() bool {
+	if m.focusedPath == "" || m.scanResult == nil {
+		return false
+	}
+	focusPath := normalizePath(m.focusedPath)
+	for _, file := range m.scanResult.Files {
+		if normalizePath(file.RelPath) == focusPath {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizePath(p string) string {
+	if p == "" {
+		return ""
+	}
+	clean := filepath.Clean(strings.ReplaceAll(p, "\\", string(filepath.Separator)))
+	return filepath.ToSlash(clean)
 }
 
 // batchJobInteractive represents a batch processing job for interactive mode
@@ -660,9 +830,11 @@ func (m InteractiveModel) processSequentiallyForInteractive(batches [][]*types.F
 
 		response, err := m.processBatchForInteractive(batch, question, analyzerEngine)
 		if err != nil {
-			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v", fileName, err))
+			allResponses = append(allResponses, fmt.Sprintf("=== %s ===\n⚠️  FAILED: %v", fileName, err))
 		} else {
-			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===%s", fileName, response.Response))
+			// Trim leading/trailing whitespace from response
+			cleanResponse := strings.TrimSpace(response.Response)
+			allResponses = append(allResponses, fmt.Sprintf("=== %s ===\n%s", fileName, cleanResponse))
 			fileTokens[fileName] = response.TokensUsed
 			totalDuration += response.Duration
 			if model == "" {
@@ -672,7 +844,7 @@ func (m InteractiveModel) processSequentiallyForInteractive(batches [][]*types.F
 	}
 
 	return &types.AnalysisResponse{
-		Response:   strings.Join(allResponses, "\n"),
+		Response:   strings.Join(allResponses, "\n\n"),
 		Model:      model,
 		FileTokens: fileTokens,
 		Duration:   totalDuration,
@@ -790,6 +962,11 @@ func (m InteractiveModel) processBatchForInteractive(batch []*types.FileInfo, qu
 	}
 
 	return m.llmClient.Analyze(actualQuestion, content, m.cfg.LLM.Temperature)
+}
+
+func isFileHeaderLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(trimmed, "===") && strings.HasSuffix(trimmed, "===") && len(trimmed) > 8
 }
 
 func (m InteractiveModel) wrapMessage(text string, width int) string {

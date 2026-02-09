@@ -20,7 +20,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const version = "0.1.0"
+const (
+	version   = "0.1.0"
+	ansiGreen = "\033[32m"
+	ansiReset = "\033[0m"
+)
 
 func main() {
 	// Define CLI flags
@@ -28,6 +32,7 @@ func main() {
 		configPath      = flag.String("config", "", "Path to configuration file")
 		task            = flag.String("task", "", "Analysis task description")
 		directory       = flag.String("dir", ".", "Directory to analyze")
+		focusFile       = flag.String("focus", "", "Analyze only this file (relative to --dir; if outside, directory adjusts automatically)")
 		model           = flag.String("model", "", "LLM model to use (overrides config)")
 		dryRun          = flag.Bool("dry-run", false, "List files without analyzing")
 		viewLast        = flag.Bool("view-last", false, "View the last saved analysis")
@@ -40,6 +45,13 @@ func main() {
 	)
 
 	flag.Parse()
+
+	var dirFlagSet bool
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "dir" {
+			dirFlagSet = true
+		}
+	})
 
 	// View last analysis
 	if *viewLast {
@@ -97,9 +109,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	focusRel := ""
+	if *focusFile != "" {
+		originalDir := absDir
+		var newDir string
+		focusRel, newDir, err = resolveFocusPath(absDir, *focusFile, dirFlagSet)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid --focus path: %v\n", err)
+			os.Exit(1)
+		}
+		if newDir != "" {
+			absDir = newDir
+		}
+		if absDir != originalDir {
+			fmt.Printf("🎯 Adjusted analysis root to %s based on --focus target.\n", absDir)
+		}
+	}
+
 	// If interactive mode requested, start the interactive session
 	if *interactive {
-		startInteractiveMode(absDir, cfg, llmClient)
+		startInteractiveMode(absDir, cfg, llmClient, focusRel)
 		return
 	}
 
@@ -119,8 +148,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	if focusRel != "" && !scanResultHasFile(result, focusRel) {
+		fmt.Fprintf(os.Stderr, "Focused file %s was not included in the scan (check filters and path).\n", focusRel)
+		os.Exit(1)
+	}
+
 	// Display scan results
 	displayScanResult(result)
+	if focusRel != "" {
+		fmt.Printf("\n🎯 Focus enabled: %s\nOnly this file will be analyzed.\n", focusRel)
+	}
 
 	// If dry-run, stop here
 	if *dryRun {
@@ -137,7 +174,7 @@ func main() {
 	// Perform analysis
 	fmt.Printf("\n🔬 Analyzing files with task: %s\n\n", *task)
 
-	analysisResult, err := analyzeFiles(result, *task, cfg, llmClient)
+	analysisResult, err := analyzeFiles(result, focusRel, *task, cfg, llmClient)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Analysis failed: %v\n", err)
 		os.Exit(1)
@@ -279,14 +316,13 @@ func scanDirectory(rootPath string, cfg *config.Config) (*types.ScanResult, erro
 	return result, nil
 }
 
-func analyzeFiles(scanResult *types.ScanResult, task string, cfg *config.Config, llmClient *llm.OllamaClient) (*types.AnalysisResponse, error) {
+func analyzeFiles(scanResult *types.ScanResult, focusRel string, task string, cfg *config.Config, llmClient *llm.OllamaClient) (*types.AnalysisResponse, error) {
 	// Prepare files for LLM
 	analyzer := analyzer.NewAnalyzer(cfg)
 
-	// Convert []FileInfo to []*FileInfo
-	fileInfoPtrs := make([]*types.FileInfo, len(scanResult.Files))
-	for i := range scanResult.Files {
-		fileInfoPtrs[i] = &scanResult.Files[i]
+	fileInfoPtrs, err := selectFilesForAnalysis(scanResult, focusRel)
+	if err != nil {
+		return nil, err
 	}
 
 	// Always process files individually (one request per file)
@@ -365,9 +401,9 @@ func processSequentially(batches [][]*types.FileInfo, task string, cfg *config.C
 		response, err := processBatch(batch, task, cfg, llmClient, analyzer)
 		if err != nil {
 			fmt.Printf("   ⚠️  File %d (%s) failed: %v\n", fileNum, fileName, err)
-			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v", fileName, err))
+			allResponses = append(allResponses, formatFileErrorSection(fileName, err))
 		} else {
-			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===%s", fileName, response.Response))
+			allResponses = append(allResponses, formatFileSection(fileName, response.Response))
 			totalTokens += response.TokensUsed
 			totalDuration += response.Duration
 			if model == "" {
@@ -479,10 +515,10 @@ func processConcurrently(batches [][]*types.FileInfo, task string, cfg *config.C
 		fileName := fileNames[i]
 		if response, ok := fileResults[i]; ok {
 			// Successful file
-			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===%s", fileName, response.Response))
+			allResponses = append(allResponses, formatFileSection(fileName, response.Response))
 		} else if err, failed := failedFiles[i]; failed {
 			// Failed file - include error message
-			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v", fileName, err))
+			allResponses = append(allResponses, formatFileErrorSection(fileName, err))
 		}
 	}
 
@@ -527,6 +563,99 @@ func processBatch(batch []*types.FileInfo, task string, cfg *config.Config, llmC
 	}
 
 	return llmClient.Analyze(actualTask, content, cfg.LLM.Temperature)
+}
+
+func formatFileSection(fileName, body string) string {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return "\n" + formatFileHeaderLine(fileName)
+	}
+	return fmt.Sprintf("\n%s\n%s", formatFileHeaderLine(fileName), trimmed)
+}
+
+func formatFileErrorSection(fileName string, err error) string {
+	return fmt.Sprintf("\n%s\n⚠️  FAILED: %v", formatFileHeaderLine(fileName), err)
+}
+
+func formatFileHeaderLine(fileName string) string {
+	return fmt.Sprintf("=== %s%s%s ===", ansiGreen, fileName, ansiReset)
+}
+
+func selectFilesForAnalysis(scanResult *types.ScanResult, focusRel string) ([]*types.FileInfo, error) {
+	if focusRel == "" {
+		fileInfoPtrs := make([]*types.FileInfo, len(scanResult.Files))
+		for i := range scanResult.Files {
+			fileInfoPtrs[i] = &scanResult.Files[i]
+		}
+		return fileInfoPtrs, nil
+	}
+
+	normalizedFocus := normalizeRelPath(focusRel)
+	for i := range scanResult.Files {
+		if normalizeRelPath(scanResult.Files[i].RelPath) == normalizedFocus {
+			return []*types.FileInfo{&scanResult.Files[i]}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("focused file %s not found in scan results (possibly filtered out)", focusRel)
+}
+
+func scanResultHasFile(result *types.ScanResult, relPath string) bool {
+	normalized := normalizeRelPath(relPath)
+	for _, file := range result.Files {
+		if normalizeRelPath(file.RelPath) == normalized {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeRelPath(path string) string {
+	return filepath.ToSlash(filepath.Clean(path))
+}
+
+func resolveFocusPath(rootDir, focusInput string, dirLocked bool) (string, string, error) {
+	if focusInput == "" {
+		return "", rootDir, nil
+	}
+
+	focusPath := focusInput
+	if !filepath.IsAbs(focusPath) {
+		focusPath = filepath.Join(rootDir, focusPath)
+	}
+
+	absFocus, err := filepath.Abs(focusPath)
+	if err != nil {
+		return "", rootDir, err
+	}
+
+	info, err := os.Stat(absFocus)
+	if err != nil {
+		return "", rootDir, err
+	}
+	if info.IsDir() {
+		return "", rootDir, fmt.Errorf("%s is a directory; provide a file path for --focus", focusInput)
+	}
+
+	rel, err := filepath.Rel(rootDir, absFocus)
+	if err == nil {
+		rel = normalizeRelPath(rel)
+		if rel != ".." && !strings.HasPrefix(rel, "../") {
+			return rel, rootDir, nil
+		}
+	}
+
+	if dirLocked {
+		return "", rootDir, fmt.Errorf("focus file must be inside the target directory (%s)", rootDir)
+	}
+
+	newRoot := filepath.Dir(absFocus)
+	relToNewRoot, err := filepath.Rel(newRoot, absFocus)
+	if err != nil {
+		return "", rootDir, err
+	}
+
+	return normalizeRelPath(relToNewRoot), newRoot, nil
 }
 
 func displayScanResult(result *types.ScanResult) {
@@ -677,28 +806,30 @@ func displayAnalysisSummary(result *types.AnalysisResponse) {
 	}
 }
 
-func startInteractiveMode(directory string, cfg *config.Config, llmClient *llm.OllamaClient) {
-	fmt.Printf("🔍 Scanning directory: %s\n", directory)
-	fmt.Printf("⏳ Please wait...\n\n")
-
-	// Perform initial scan
+func startInteractiveMode(directory string, cfg *config.Config, llmClient *llm.OllamaClient, focusRel string) {
+	// Perform initial scan silently
 	scanResult, err := scanDirectory(directory, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to scan directory: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("✅ Scan complete! Found %d files\n", scanResult.TotalFiles)
-	fmt.Printf("🚀 Starting interactive mode...\n\n")
+	if focusRel != "" && !scanResultHasFile(scanResult, focusRel) {
+		fmt.Fprintf(os.Stderr, "Warning: focused file %s was not included in the scan. Starting without focus.\n", focusRel)
+		focusRel = ""
+	}
 
 	// Start interactive TUI
-	m := tui.NewInteractiveModel(directory, cfg.LLM.Model, cfg.LLM.Endpoint, scanResult, cfg, llmClient)
+	m := tui.NewInteractiveModel(directory, cfg.LLM.Model, cfg.LLM.Endpoint, scanResult, cfg, llmClient, focusRel)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running interactive mode: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Print goodbye message after TUI exits
+	fmt.Println("👋 Bye!")
 }
 
 func formatBytes(bytes int64) string {

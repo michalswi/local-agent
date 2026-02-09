@@ -75,6 +75,10 @@ var (
 	assistantMessageStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#F8F8F2"))
 
+	fileHeaderStyle = lipgloss.NewStyle().
+			Foreground(successColor).
+			Bold(true)
+
 	metadataStyle = lipgloss.NewStyle().
 			Foreground(subtleColor).
 			Italic(true)
