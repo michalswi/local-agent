@@ -13,6 +13,7 @@ import (
 	"local-agent/filter"
 	"local-agent/llm"
 	"local-agent/security"
+	"local-agent/sessionlog"
 	"local-agent/types"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -78,7 +79,7 @@ func NewInteractiveModel(directory, model, endpoint string, scanResult *types.Sc
 	// Add welcome message
 	welcome := Message{
 		Role: "assistant",
-		Content: fmt.Sprintf("🤖 Interactive mode started!\n\nScanned: %s\nFiles found: %d\nModel: %s\n\n🔧 Configuration:\n   Token Limit: %d\n   Concurrent Files: %d\n   Temperature: %.2f\n\nType your questions or commands. Type 'help' for available commands, 'quit' or 'exit' to leave.",
+		Content: fmt.Sprintf("🤖 Interactive mode started!\n\nScanned: %s\nFiles found: %d\nModel: %s\n\n🔧 Configuration:\n   Token Limit: %d\n   Concurrent Files: %d\n   Temperature: %.2f\n\n🌐 Web UI: http://localhost:5050\n\nType your questions or commands. Type 'help' for available commands, 'quit' or 'exit' to leave.",
 			directory, scanResult.TotalFiles, model, cfg.Agent.TokenLimit, cfg.Agent.ConcurrentFiles, cfg.LLM.Temperature),
 		Timestamp: time.Now(),
 	}
@@ -388,7 +389,6 @@ func (m *InteractiveModel) handleCommand(input string) bool {
 • stats - Show scan statistics
 • files - List scanned files
 • focus <path> - Analyze only the specified file (use 'focus clear' to reset)
-• last - View last saved analysis
 • clear - Clear conversation history
 • quit, exit, q - Exit interactive mode
 
@@ -448,30 +448,6 @@ File breakdown:`,
 		})
 		return true
 
-	case "last":
-		lastFile := filepath.Join(os.TempDir(), "local-agent-last.txt")
-		content, err := os.ReadFile(lastFile)
-		if err != nil {
-			var msg string
-			if os.IsNotExist(err) {
-				msg = "❌ No previous analysis found.\nRun an analysis first (non-interactive mode) to save results."
-			} else {
-				msg = fmt.Sprintf("⚠️ Failed to read last analysis: %v", err)
-			}
-			m.messages = append(m.messages, Message{
-				Role:      "assistant",
-				Content:   msg,
-				Timestamp: time.Now(),
-			})
-		} else {
-			m.messages = append(m.messages, Message{
-				Role:      "assistant",
-				Content:   string(content),
-				Timestamp: time.Now(),
-			})
-		}
-		return true
-
 	case "clear":
 		// Keep only the welcome message
 		if len(m.messages) > 0 {
@@ -527,6 +503,8 @@ File breakdown:`,
 }
 
 func (m InteractiveModel) processQuestion(question string, files []*types.FileInfo) tea.Cmd {
+	currentFocusedPath := m.focusedPath
+
 	return func() tea.Msg {
 		// Prepare file context for LLM
 		analyzerEngine := analyzer.NewAnalyzer(m.cfg)
@@ -566,8 +544,33 @@ func (m InteractiveModel) processQuestion(question string, files []*types.FileIn
 			response.WriteString(fmt.Sprintf("📊 Tokens: %d  •  ⏱️  Duration: %.2fs", result.TokensUsed, result.Duration.Seconds()))
 		}
 
-		// Save to temp file for 'last' command
-		saveAnalysisToTempFile(result, question)
+		record := &sessionlog.Record{
+			Timestamp:  time.Now(),
+			Mode:       "interactive",
+			Directory:  m.directory,
+			Task:       question,
+			Focus:      currentFocusedPath,
+			Model:      m.model,
+			TokensUsed: result.TokensUsed,
+			FileTokens: result.FileTokens,
+			Duration:   result.Duration,
+			Findings:   result.Findings,
+			Response:   result.Response,
+			Files:      sessionlog.FilesFromTokens(result.FileTokens, currentFocusedPath),
+		}
+
+		if m.scanResult != nil {
+			record.ScanSummary = &sessionlog.ScanSummary{
+				TotalFiles:    m.scanResult.TotalFiles,
+				FilteredFiles: m.scanResult.FilteredFiles,
+				TotalSize:     m.scanResult.TotalSize,
+				Duration:      m.scanResult.Duration,
+			}
+		}
+
+		if _, err := sessionlog.Save(record); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to save session JSON: %v\n", err)
+		}
 
 		return processCompleteMsg{
 			response: response.String(),
@@ -923,20 +926,21 @@ func (m InteractiveModel) processConcurrentlyForInteractive(batches [][]*types.F
 		fileName := fileNames[i]
 		if response, ok := fileResults[i]; ok {
 			// Successful file
-			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===%s", fileName, response.Response))
+			cleanResponse := strings.TrimSpace(response.Response)
+			allResponses = append(allResponses, fmt.Sprintf("=== %s ===\n%s", fileName, cleanResponse))
 		} else if err, failed := failedFiles[i]; failed {
 			// Failed file - include error message
-			allResponses = append(allResponses, fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v", fileName, err))
+			allResponses = append(allResponses, fmt.Sprintf("=== %s ===\n⚠️  FAILED: %v", fileName, err))
 		}
 	}
 
 	// Add summary of failures if any
 	var responseText string
 	if len(failedFiles) > 0 {
-		responseText = fmt.Sprintf("⚠️  Warning: %d of %d files failed (see details below)\n", len(failedFiles), totalFiles)
-		responseText += strings.Join(allResponses, "\n")
+		responseText = fmt.Sprintf("⚠️  Warning: %d of %d files failed (see details below)\n\n", len(failedFiles), totalFiles)
+		responseText += strings.Join(allResponses, "\n\n")
 	} else {
-		responseText = strings.Join(allResponses, "\n")
+		responseText = strings.Join(allResponses, "\n\n")
 	}
 
 	return &types.AnalysisResponse{
@@ -1011,24 +1015,6 @@ func (m InteractiveModel) wrapMessage(text string, width int) string {
 	}
 
 	return strings.Join(outputLines, "\n")
-}
-
-func saveAnalysisToTempFile(result *types.AnalysisResponse, question string) {
-	lastFile := filepath.Join(os.TempDir(), "local-agent-last.txt")
-
-	var content strings.Builder
-	content.WriteString("Analysis Results\n")
-	content.WriteString(fmt.Sprintf("Generated: %s\n", time.Now().Format(time.RFC3339)))
-	content.WriteString(fmt.Sprintf("Model: %s\n", result.Model))
-	content.WriteString(fmt.Sprintf("Tokens: %d\n", result.TokensUsed))
-	content.WriteString(fmt.Sprintf("Duration: %v\n", result.Duration))
-	content.WriteString("\n" + strings.Repeat("=", 80) + "\n\n")
-	content.WriteString(fmt.Sprintf("QUESTION:\n%s\n\n", question))
-	content.WriteString(strings.Repeat("-", 80) + "\n\n")
-	content.WriteString(fmt.Sprintf("RESPONSE:\n%s\n", result.Response))
-
-	// Save to last file (ignore errors)
-	os.WriteFile(lastFile, []byte(content.String()), 0644)
 }
 
 func min(a, b int) int {

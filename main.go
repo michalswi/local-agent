@@ -14,8 +14,10 @@ import (
 	"local-agent/filter"
 	"local-agent/llm"
 	"local-agent/security"
+	"local-agent/sessionlog"
 	"local-agent/tui"
 	"local-agent/types"
+	"local-agent/webui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -35,7 +37,6 @@ func main() {
 		focusFile       = flag.String("focus", "", "Analyze only this file (relative to --dir; if outside, directory adjusts automatically)")
 		model           = flag.String("model", "", "LLM model to use (overrides config)")
 		dryRun          = flag.Bool("dry-run", false, "List files without analyzing")
-		viewLast        = flag.Bool("view-last", false, "View the last saved analysis")
 		noDetectSecrets = flag.Bool("no-detect-secrets", false, "Disable secret/sensitive content detection")
 
 		showVersion = flag.Bool("version", false, "Show version")
@@ -52,12 +53,6 @@ func main() {
 			dirFlagSet = true
 		}
 	})
-
-	// View last analysis
-	if *viewLast {
-		viewLastAnalysis()
-		return
-	}
 
 	// Show version
 	if *showVersion {
@@ -183,14 +178,8 @@ func main() {
 	// Display analysis results
 	displayAnalysisResult(analysisResult)
 
-	// Save analysis to temp file for later viewing
-	tempFile, err := saveAnalysisToTemp(analysisResult, *task)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "\n⚠️  Failed to save to temp file: %v\n", err)
-	} else {
-		fmt.Printf("\n💾 Results also saved to: %s\n", tempFile)
-		fmt.Printf("💡 View anytime with: ./local-agent --view-last\n")
-	}
+	// Persist session details as JSON
+	saveSessionRecord("standalone", absDir, focusRel, *task, cfg.LLM.Model, result, analysisResult)
 }
 
 func scanDirectory(rootPath string, cfg *config.Config) (*types.ScanResult, error) {
@@ -747,53 +736,52 @@ func listAvailableModels(client *llm.OllamaClient) {
 	}
 }
 
-func saveAnalysisToTemp(result *types.AnalysisResponse, task string) (string, error) {
-	tempDir := os.TempDir()
-	tempFile := filepath.Join(tempDir, fmt.Sprintf("local-agent-analysis-%d.txt", time.Now().Unix()))
-	lastFile := filepath.Join(tempDir, "local-agent-last.txt")
-
-	var content strings.Builder
-	content.WriteString("Analysis Results\n")
-	content.WriteString(fmt.Sprintf("Generated: %s\n", time.Now().Format(time.RFC3339)))
-	content.WriteString(fmt.Sprintf("Model: %s\n", result.Model))
-	content.WriteString(fmt.Sprintf("Tokens: %d\n", result.TokensUsed))
-	content.WriteString(fmt.Sprintf("Duration: %v\n", result.Duration))
-	content.WriteString("\n" + strings.Repeat("=", 80) + "\n\n")
-	content.WriteString(fmt.Sprintf("TASK:\n%s\n\n", task))
-	content.WriteString(strings.Repeat("-", 80) + "\n\n")
-	content.WriteString(fmt.Sprintf("RESPONSE:\n%s\n", result.Response))
-
-	contentBytes := []byte(content.String())
-
-	// Save to timestamped file
-	if err := os.WriteFile(tempFile, contentBytes, 0644); err != nil {
-		return "", fmt.Errorf("failed to write temp file: %w", err)
+func saveSessionRecord(mode, directory, focus, task, model string, scanResult *types.ScanResult, analysisResult *types.AnalysisResponse) {
+	record := buildSessionRecord(mode, directory, focus, task, model, scanResult, analysisResult)
+	if record == nil {
+		return
 	}
 
-	// Save to last file for --view-last
-	if err := os.WriteFile(lastFile, contentBytes, 0644); err != nil {
-		// Don't fail if we can't write last file
-		fmt.Fprintf(os.Stderr, "Warning: failed to save last file: %v\n", err)
+	path, err := sessionlog.Save(record)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to save session JSON: %v\n", err)
+		return
 	}
 
-	return tempFile, nil
+	fmt.Printf("🗂️ Session saved to: %s\n", path)
 }
 
-func viewLastAnalysis() {
-	lastFile := filepath.Join(os.TempDir(), "local-agent-last.txt")
-
-	content, err := os.ReadFile(lastFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "No previous analysis found.\n")
-			fmt.Fprintf(os.Stderr, "Run an analysis first with: ./local-agent -dir <path> -task \"<task>\"\n")
-		} else {
-			fmt.Fprintf(os.Stderr, "Failed to read last analysis: %v\n", err)
-		}
-		os.Exit(1)
+func buildSessionRecord(mode, directory, focus, task, model string, scanResult *types.ScanResult, analysisResult *types.AnalysisResponse) *sessionlog.Record {
+	if analysisResult == nil {
+		return nil
 	}
 
-	fmt.Print(string(content))
+	record := &sessionlog.Record{
+		Timestamp:  time.Now(),
+		Mode:       mode,
+		Directory:  directory,
+		Task:       task,
+		Focus:      focus,
+		Model:      model,
+		TokensUsed: analysisResult.TokensUsed,
+		FileTokens: analysisResult.FileTokens,
+		Duration:   analysisResult.Duration,
+		Findings:   analysisResult.Findings,
+		Response:   analysisResult.Response,
+	}
+
+	record.Files = sessionlog.FilesFromTokens(analysisResult.FileTokens, focus)
+
+	if scanResult != nil {
+		record.ScanSummary = &sessionlog.ScanSummary{
+			TotalFiles:    scanResult.TotalFiles,
+			FilteredFiles: scanResult.FilteredFiles,
+			TotalSize:     scanResult.TotalSize,
+			Duration:      scanResult.Duration,
+		}
+	}
+
+	return record
 }
 
 func displayAnalysisSummary(result *types.AnalysisResponse) {
@@ -818,6 +806,14 @@ func startInteractiveMode(directory string, cfg *config.Config, llmClient *llm.O
 		fmt.Fprintf(os.Stderr, "Warning: focused file %s was not included in the scan. Starting without focus.\n", focusRel)
 		focusRel = ""
 	}
+
+	// Start web server in a goroutine
+	webServer := webui.NewServer(directory, cfg.LLM.Model, cfg.LLM.Endpoint, scanResult, cfg, llmClient, focusRel)
+	go func() {
+		if err := webServer.Start(5050); err != nil {
+			fmt.Fprintf(os.Stderr, "Web server error: %v\n", err)
+		}
+	}()
 
 	// Start interactive TUI
 	m := tui.NewInteractiveModel(directory, cfg.LLM.Model, cfg.LLM.Endpoint, scanResult, cfg, llmClient, focusRel)

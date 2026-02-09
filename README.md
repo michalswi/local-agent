@@ -16,10 +16,9 @@
 ## ✨ Features
 
 - 🔍 Smart file scanning
-- 💬 Interactive mode with live rescan capability
+- 💬 Interactive mode (terminal UI + web UI at localhost:5050) with live rescan capability
 - ⚡ Concurrent batch processing for large projects
 - 🔒 Privacy-first - all processing happens locally
-- 🛡️ Security-aware - detects and sanitizes secrets/PII before LLM submission
 
 ## 🚀 Quick Start
 
@@ -36,7 +35,6 @@ make build
 ./local-agent -dir ./myproject --interactive
 
 # Other commands
-./local-agent --view-last      # View previous results
 ./local-agent --health         # Check LLM connection
 ./local-agent --list-models    # Show available models
 ```
@@ -68,7 +66,9 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 ./local-agent -dir <full_path_to_dir> --interactive
 ```
 
-**Commands:** `help`, `model <name>`, `rescan`, `stats`, `files`, `focus <path>`, `last`, `clear`, `quit`
+**Web UI:** Opens automatically at http://localhost:5050
+
+**Commands:** `help`, `model <name>`, `rescan`, `stats`, `files`, `focus <path>`, `clear`, `quit`
 
 **Navigation:** `↑/↓` scroll, `Enter` send
 
