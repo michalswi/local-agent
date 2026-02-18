@@ -6,7 +6,7 @@ const htmlTemplate = `<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>local-agent</title>
-    <link rel="icon" type="image/png" href="/static/favicon.png" sizes="32x32">
+    <link rel="icon" type="image/png" href="/static/favicon.png" sizes="150x150">
     <style>
         :root {
             --bg-primary: #1a1a1a;
@@ -266,7 +266,7 @@ const htmlTemplate = `<!DOCTYPE html>
 <body>
     <div class="header">
         <div class="header-content">
-            <h1><img src="/static/favicon.png" alt="Local Agent" style="width: 2.5rem; height: 2.5rem; vertical-align: middle; margin-right: 0.75rem;"> local-agent [interactive mode]</h1>
+            <h1><img src="/static/favicon.png" alt="Local Agent" style="width: 4rem; height: 4rem; vertical-align: middle; margin-right: 0.75rem;"> local-agent [interactive mode]</h1>
             <div class="status-bar">
             <div class="status-item">
                 <span class="status-label">Directory:</span>

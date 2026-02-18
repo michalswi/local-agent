@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -87,17 +88,12 @@ func NewServer(directory, model, endpoint string, scanResult *types.ScanResult, 
 
 // Start starts the web server
 func (s *Server) Start(port int) error {
-	// Serve static files from webstatic directory
-	execPath, err := os.Executable()
-	if err == nil {
-		execDir := filepath.Dir(execPath)
-		staticDir := filepath.Join(execDir, "webui", "webstatic")
-		// Check if static directory exists relative to executable
-		if _, err := os.Stat(staticDir); os.IsNotExist(err) {
-			// Try current working directory
-			staticDir = filepath.Join("webui", "webstatic")
-		}
-		http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
+	// Serve embedded static files
+	staticFS, err := fs.Sub(StaticFiles, "webstatic")
+	if err != nil {
+		log.Printf("Warning: failed to access embedded static files: %v", err)
+	} else {
+		http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	}
 
 	http.HandleFunc("/", s.handleIndex)
