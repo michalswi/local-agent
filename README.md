@@ -19,6 +19,8 @@
 - 💬 Interactive mode (terminal UI + web UI at localhost:5050) with live rescan capability
 - ⚡ Concurrent batch processing for large projects
 - 🔒 Privacy-first - all processing happens locally
+- 🌐 Remote Ollama support via `--host` flag (e.g., `--host 192.168.1.100:11434`)
+- 📦 Standalone binary with embedded assets - no external dependencies
 
 ## 🚀 Quick Start
 
@@ -33,6 +35,9 @@ make build
 
 # Interactive mode
 ./local-agent -dir ./myproject --interactive
+
+# Connect to remote Ollama instance
+./local-agent -dir ./myproject --host 192.168.1.100:11434 --interactive
 
 # Other commands
 ./local-agent --health         # Check LLM connection
@@ -57,6 +62,10 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 ./local-agent -dir <full_path_to_dir> -task "explain the architecture" --model codellama
 
 ./local-agent --focus ./cmd/main.go -task "review this file"
+
+# Connect to remote Ollama instance
+./local-agent -dir . -task "analyze" --host 192.168.1.100:11434
+./local-agent -dir . --interactive --host ollama.example.com:8080
 ```
 
 ### Interactive Mode

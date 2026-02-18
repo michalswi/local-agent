@@ -149,7 +149,7 @@ func (f *Filter) ShouldFollowSymlink(path string) bool {
 	return f.config.Security.FollowSymlinks
 }
 
-// IsWithinDepthLimit checks if the current depth is within limits
+// IsWithinDepthLimit checks if the current depth (nested folders) is within limits
 func (f *Filter) IsWithinDepthLimit(depth int) bool {
 	return depth <= f.config.Security.MaxDepth
 }

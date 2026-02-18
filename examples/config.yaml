@@ -91,7 +91,7 @@ security:
   detect_secrets: true       # scan for potential secrets/credentials
   skip_binaries: true        # skip binary files
   follow_symlinks: false     # whether to follow symbolic links
-  max_depth: 20              # maximum directory depth to traverse
+  max_depth: 20              # maximum directory depth to traverse (nested folders)
 
 chunking:
   strategy: "smart"          # smart (context-aware), lines, or tokens

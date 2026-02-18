@@ -134,7 +134,7 @@ func DefaultConfig() *Config {
 			DetectSecrets:  false, // Disabled by default
 			SkipBinaries:   true,
 			FollowSymlinks: false,
-			MaxDepth:       20,
+			MaxDepth:       20, // Maximum directory depth to traverse (nested folders)
 		},
 		Chunking: ChunkingConfig{
 			Strategy:  "smart",

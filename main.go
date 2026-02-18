@@ -36,6 +36,7 @@ func main() {
 		directory       = flag.String("dir", ".", "Directory to analyze")
 		focusFile       = flag.String("focus", "", "Analyze only this file (relative to --dir; if outside, directory adjusts automatically)")
 		model           = flag.String("model", "", "LLM model to use (overrides config)")
+		host            = flag.String("host", "localhost:11434", "Ollama instance host (e.g., localhost:11434, 192.168.1.100:8080, or ollama.example.com:11434)")
 		dryRun          = flag.Bool("dry-run", false, "List files without analyzing")
 		noDetectSecrets = flag.Bool("no-detect-secrets", false, "Disable secret/sensitive content detection")
 
@@ -70,6 +71,11 @@ func main() {
 	// Override model if specified via flag
 	if *model != "" {
 		cfg.LLM.Model = *model
+	}
+
+	// Override host if specified via flag
+	if *host != "localhost:11434" {
+		cfg.LLM.Endpoint = fmt.Sprintf("http://%s", *host)
 	}
 
 	// Override secret detection if disabled via flag
@@ -246,6 +252,7 @@ func scanDirectory(rootPath string, cfg *config.Config) (*types.ScanResult, erro
 		}
 
 		if info.IsDir() {
+			// directory depth to traverse (nested folders)
 			if !fileFilter.IsWithinDepthLimit(depth) {
 				return
 			}
