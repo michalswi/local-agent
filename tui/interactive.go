@@ -388,7 +388,8 @@ func (m *InteractiveModel) handleCommand(input string) bool {
 • rescan - Re-scan directory for new/changed files
 • stats - Show scan statistics
 • files - List scanned files
-• focus <path> - Analyze only the specified file (use 'focus clear' to reset)
+• focus <path> - Analyze only the specified file
+• focus clear - Reset focus to analyze all files
 • clear - Clear conversation history
 • quit, exit, q - Exit interactive mode
 
