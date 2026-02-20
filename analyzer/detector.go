@@ -12,6 +12,9 @@ import (
 
 	"local-agent/types"
 
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
 	"github.com/michalswi/pdf-reader/pdf"
 )
 
@@ -58,7 +61,7 @@ func (d *Detector) DetectFile(path string) (*types.FileInfo, error) {
 	}
 
 	fileInfo.Type = fileType
-	fileInfo.IsReadable = (fileType == types.TypeText || fileType == types.TypePDF)
+	fileInfo.IsReadable = (fileType == types.TypeText || fileType == types.TypePDF || fileType == types.TypePCAP)
 
 	return fileInfo, nil
 }
@@ -116,6 +119,17 @@ func (d *Detector) detectFileType(path, ext string) (types.FileType, error) {
 		return types.TypePDF, nil
 	}
 
+	// Check for PCAP files
+	pcapExts := []string{
+		".pcap", ".pcapng", ".cap",
+	}
+
+	for _, pcapExt := range pcapExts {
+		if ext == pcapExt {
+			return types.TypePCAP, nil
+		}
+	}
+
 	// Try to detect by content
 	file, err := os.Open(path)
 	if err != nil {
@@ -169,6 +183,189 @@ func (d *Detector) ReadPDFContent(path string) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+// ReadPCAPContent extracts information from a PCAP file
+func (d *Detector) ReadPCAPContent(path string) (string, error) {
+	handle, err := pcap.OpenOffline(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to open PCAP file: %w", err)
+	}
+	defer handle.Close()
+
+	var builder strings.Builder
+	builder.WriteString("=== PCAP File Analysis ===\n\n")
+
+	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+
+	// Track statistics
+	totalPackets := 0
+	protocolCount := make(map[string]int)
+	srcIPs := make(map[string]int)
+	dstIPs := make(map[string]int)
+	srcPorts := make(map[string]int)
+	dstPorts := make(map[string]int)
+	var firstTimestamp, lastTimestamp string
+
+	// Sample first few packets for detailed analysis
+	const maxDetailedPackets = 10
+	var detailedPackets []string
+
+	for packet := range packetSource.Packets() {
+		totalPackets++
+
+		// Capture timestamp
+		if totalPackets == 1 {
+			firstTimestamp = packet.Metadata().Timestamp.String()
+		}
+		lastTimestamp = packet.Metadata().Timestamp.String()
+
+		// Analyze network layer
+		if networkLayer := packet.NetworkLayer(); networkLayer != nil {
+			if ipLayer := packet.Layer(layers.LayerTypeIPv4); ipLayer != nil {
+				ip, _ := ipLayer.(*layers.IPv4)
+				srcIP := ip.SrcIP.String()
+				dstIP := ip.DstIP.String()
+				srcIPs[srcIP]++
+				dstIPs[dstIP]++
+				protocolCount["IPv4"]++
+			} else if ipLayer := packet.Layer(layers.LayerTypeIPv6); ipLayer != nil {
+				ip, _ := ipLayer.(*layers.IPv6)
+				srcIP := ip.SrcIP.String()
+				dstIP := ip.DstIP.String()
+				srcIPs[srcIP]++
+				dstIPs[dstIP]++
+				protocolCount["IPv6"]++
+			}
+		}
+
+		// Analyze transport layer
+		if transportLayer := packet.TransportLayer(); transportLayer != nil {
+			switch transportLayer.LayerType() {
+			case layers.LayerTypeTCP:
+				tcp, _ := transportLayer.(*layers.TCP)
+				srcPorts[fmt.Sprintf("%d", tcp.SrcPort)]++
+				dstPorts[fmt.Sprintf("%d", tcp.DstPort)]++
+				protocolCount["TCP"]++
+			case layers.LayerTypeUDP:
+				udp, _ := transportLayer.(*layers.UDP)
+				srcPorts[fmt.Sprintf("%d", udp.SrcPort)]++
+				dstPorts[fmt.Sprintf("%d", udp.DstPort)]++
+				protocolCount["UDP"]++
+			}
+		}
+
+		// Analyze application layer
+		if appLayer := packet.ApplicationLayer(); appLayer != nil {
+			if packet.Layer(layers.LayerTypeDNS) != nil {
+				protocolCount["DNS"]++
+			} else if packet.Layer(layers.LayerTypeTLS) != nil {
+				protocolCount["TLS"]++
+			} else if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
+				// Check for HTTP on common ports
+				tcp, _ := tcpLayer.(*layers.TCP)
+				if tcp.DstPort == 80 || tcp.SrcPort == 80 || tcp.DstPort == 8080 || tcp.SrcPort == 8080 {
+					protocolCount["HTTP"]++
+				}
+			}
+		}
+
+		// Capture detailed view of first few packets
+		if totalPackets <= maxDetailedPackets {
+			detailedPackets = append(detailedPackets, fmt.Sprintf("Packet #%d: %s", totalPackets, packet.String()))
+		}
+
+		// Limit processing for very large captures
+		if totalPackets >= 100000 {
+			builder.WriteString("⚠️  Large capture detected. Processing first 100,000 packets only.\n\n")
+			break
+		}
+	}
+
+	// Build summary
+	builder.WriteString("📊 Summary:\n")
+	builder.WriteString(fmt.Sprintf("- Total Packets: %d\n", totalPackets))
+	builder.WriteString(fmt.Sprintf("- First Packet: %s\n", firstTimestamp))
+	builder.WriteString(fmt.Sprintf("- Last Packet: %s\n\n", lastTimestamp))
+
+	// Protocol breakdown
+	builder.WriteString("📦 Protocols:\n")
+	for proto, count := range protocolCount {
+		percentage := float64(count) / float64(totalPackets) * 100
+		builder.WriteString(fmt.Sprintf("- %s: %d packets (%.2f%%)\n", proto, count, percentage))
+	}
+	builder.WriteString("\n")
+
+	// Top source IPs
+	builder.WriteString("🌐 Top Source IPs:\n")
+	topCount := 5
+	for ip, count := range topN(srcIPs, topCount) {
+		builder.WriteString(fmt.Sprintf("- %s: %d packets\n", ip, count))
+	}
+	builder.WriteString("\n")
+
+	// Top destination IPs
+	builder.WriteString("🎯 Top Destination IPs:\n")
+	for ip, count := range topN(dstIPs, topCount) {
+		builder.WriteString(fmt.Sprintf("- %s: %d packets\n", ip, count))
+	}
+	builder.WriteString("\n")
+
+	// Top source ports
+	builder.WriteString("🔌 Top Source Ports:\n")
+	for port, count := range topN(srcPorts, topCount) {
+		builder.WriteString(fmt.Sprintf("- Port %s: %d packets\n", port, count))
+	}
+	builder.WriteString("\n")
+
+	// Top destination ports
+	builder.WriteString("🚪 Top Destination Ports:\n")
+	for port, count := range topN(dstPorts, topCount) {
+		builder.WriteString(fmt.Sprintf("- Port %s: %d packets\n", port, count))
+	}
+	builder.WriteString("\n")
+
+	// Sample packets
+	if len(detailedPackets) > 0 {
+		builder.WriteString("📋 Sample Packets (first 10):\n")
+		for i, pkt := range detailedPackets {
+			if i >= 3 { // Only show first 3 in detail to keep it concise
+				break
+			}
+			builder.WriteString(fmt.Sprintf("\n%s\n", pkt))
+		}
+	}
+
+	return builder.String(), nil
+}
+
+// topN returns the top N items from a map by value
+func topN(m map[string]int, n int) map[string]int {
+	type kv struct {
+		key   string
+		value int
+	}
+
+	var sorted []kv
+	for k, v := range m {
+		sorted = append(sorted, kv{k, v})
+	}
+
+	// Simple bubble sort for top N
+	for i := 0; i < len(sorted) && i < n; i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j].value > sorted[i].value {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+
+	result := make(map[string]int)
+	for i := 0; i < len(sorted) && i < n; i++ {
+		result[sorted[i].key] = sorted[i].value
+	}
+
+	return result
 }
 
 // ReadContent reads the content of a file
@@ -241,22 +438,25 @@ func (d *Detector) GetMimeType(path string) string {
 	ext := strings.ToLower(filepath.Ext(path))
 
 	mimeTypes := map[string]string{
-		".txt":  "text/plain",
-		".md":   "text/markdown",
-		".go":   "text/x-go",
-		".py":   "text/x-python",
-		".js":   "text/javascript",
-		".json": "application/json",
-		".xml":  "application/xml",
-		".yaml": "application/yaml",
-		".yml":  "application/yaml",
-		".html": "text/html",
-		".css":  "text/css",
-		".jpg":  "image/jpeg",
-		".png":  "image/png",
-		".gif":  "image/gif",
-		".pdf":  "application/pdf",
-		".zip":  "application/zip",
+		".txt":    "text/plain",
+		".md":     "text/markdown",
+		".go":     "text/x-go",
+		".py":     "text/x-python",
+		".js":     "text/javascript",
+		".json":   "application/json",
+		".xml":    "application/xml",
+		".yaml":   "application/yaml",
+		".yml":    "application/yaml",
+		".html":   "text/html",
+		".css":    "text/css",
+		".jpg":    "image/jpeg",
+		".png":    "image/png",
+		".gif":    "image/gif",
+		".pdf":    "application/pdf",
+		".zip":    "application/zip",
+		".pcap":   "application/vnd.tcpdump.pcap",
+		".pcapng": "application/x-pcapng",
+		".cap":    "application/vnd.tcpdump.pcap",
 	}
 
 	if mime, ok := mimeTypes[ext]; ok {

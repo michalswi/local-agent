@@ -128,6 +128,7 @@ func DefaultConfig() *Config {
 				"*.scala",
 				"*.log",
 				"*.pdf",
+				"*.pcap",
 			},
 		},
 		Security: SecurityConfig{

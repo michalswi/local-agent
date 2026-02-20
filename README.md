@@ -21,6 +21,7 @@
 - 🔒 Privacy-first - all processing happens locally
 - 🌐 Remote Ollama support via `--host` flag (e.g., `--host 192.168.1.100:11434`)
 - 📦 Standalone binary with embedded assets - no external dependencies
+- 📊 PCAP file analysis - parse and analyze network traffic captures (.pcap, .pcapng, .cap)
 
 ## 🚀 Quick Start
 
@@ -62,6 +63,9 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 ./local-agent -dir <full_path_to_dir> -task "explain the architecture" --model codellama
 
 ./local-agent --focus ./cmd/main.go -task "review this file"
+
+# Analyze PCAP files
+./local-agent --focus /path/to/capture.pcap -task "summarize network traffic patterns"
 
 # Connect to remote Ollama instance
 ./local-agent -dir . -task "analyze" --host 192.168.1.100:11434

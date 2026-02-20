@@ -71,6 +71,8 @@ func (a *Analyzer) AnalyzeFile(path string, rootPath string) (*types.FileInfo, e
 
 		if info.Type == types.TypePDF {
 			content, err = a.detector.ReadPDFContent(path)
+		} else if info.Type == types.TypePCAP {
+			content, err = a.detector.ReadPCAPContent(path)
 		} else {
 			content, err = a.detector.ReadContent(path, 0)
 		}
@@ -89,6 +91,8 @@ func (a *Analyzer) AnalyzeFile(path string, rootPath string) (*types.FileInfo, e
 
 		if info.Type == types.TypePDF {
 			content, err = a.detector.ReadPDFContent(path)
+		} else if info.Type == types.TypePCAP {
+			content, err = a.detector.ReadPCAPContent(path)
 		} else {
 			content, err = a.detector.ReadContent(path, 0)
 		}
@@ -110,6 +114,8 @@ func (a *Analyzer) AnalyzeFile(path string, rootPath string) (*types.FileInfo, e
 
 		if info.Type == types.TypePDF {
 			content, err = a.detector.ReadPDFContent(path)
+		} else if info.Type == types.TypePCAP {
+			content, err = a.detector.ReadPCAPContent(path)
 		} else {
 			content, err = a.detector.ReadContent(path, 0)
 		}
@@ -323,22 +329,25 @@ func formatFileSize(size int64) string {
 
 func detectLanguage(ext string) string {
 	languages := map[string]string{
-		".go":    "Go",
-		".py":    "Python",
-		".js":    "JavaScript",
-		".ts":    "TypeScript",
-		".java":  "Java",
-		".c":     "C",
-		".cpp":   "C++",
-		".h":     "C/C++ Header",
-		".rs":    "Rust",
-		".rb":    "Ruby",
-		".php":   "PHP",
-		".swift": "Swift",
-		".kt":    "Kotlin",
-		".scala": "Scala",
-		".sh":    "Shell",
-		".sql":   "SQL",
+		".go":     "Go",
+		".py":     "Python",
+		".js":     "JavaScript",
+		".ts":     "TypeScript",
+		".java":   "Java",
+		".c":      "C",
+		".cpp":    "C++",
+		".h":      "C/C++ Header",
+		".rs":     "Rust",
+		".rb":     "Ruby",
+		".php":    "PHP",
+		".swift":  "Swift",
+		".kt":     "Kotlin",
+		".scala":  "Scala",
+		".sh":     "Shell",
+		".sql":    "SQL",
+		".pcap":   "Network Capture",
+		".pcapng": "Network Capture",
+		".cap":    "Network Capture",
 	}
 
 	return languages[ext]
@@ -346,23 +355,26 @@ func detectLanguage(ext string) string {
 
 func getLanguageIdentifier(ext string) string {
 	identifiers := map[string]string{
-		".go":   "go",
-		".py":   "python",
-		".js":   "javascript",
-		".ts":   "typescript",
-		".java": "java",
-		".c":    "c",
-		".cpp":  "cpp",
-		".rs":   "rust",
-		".rb":   "ruby",
-		".php":  "php",
-		".sh":   "bash",
-		".sql":  "sql",
-		".md":   "markdown",
-		".json": "json",
-		".yaml": "yaml",
-		".yml":  "yaml",
-		".xml":  "xml",
+		".go":     "go",
+		".py":     "python",
+		".js":     "javascript",
+		".ts":     "typescript",
+		".java":   "java",
+		".c":      "c",
+		".cpp":    "cpp",
+		".rs":     "rust",
+		".rb":     "ruby",
+		".php":    "php",
+		".sh":     "bash",
+		".sql":    "sql",
+		".md":     "markdown",
+		".json":   "json",
+		".yaml":   "yaml",
+		".yml":    "yaml",
+		".xml":    "xml",
+		".pcap":   "text",
+		".pcapng": "text",
+		".cap":    "text",
 	}
 
 	if id, ok := identifiers[ext]; ok {
