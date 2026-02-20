@@ -14,7 +14,7 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"github.com/google/gopacket/pcap"
+	"github.com/google/gopacket/pcapgo"
 	"github.com/michalswi/pdf-reader/pdf"
 )
 
@@ -187,16 +187,21 @@ func (d *Detector) ReadPDFContent(path string) (string, error) {
 
 // ReadPCAPContent extracts information from a PCAP file
 func (d *Detector) ReadPCAPContent(path string) (string, error) {
-	handle, err := pcap.OpenOffline(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("failed to open PCAP file: %w", err)
 	}
-	defer handle.Close()
+	defer f.Close()
+
+	reader, err := pcapgo.NewReader(f)
+	if err != nil {
+		return "", fmt.Errorf("failed to create PCAP reader: %w", err)
+	}
 
 	var builder strings.Builder
 	builder.WriteString("=== PCAP File Analysis ===\n\n")
 
-	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+	packetSource := gopacket.NewPacketSource(reader, reader.LinkType())
 
 	// Track statistics
 	totalPackets := 0
