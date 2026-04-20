@@ -78,7 +78,7 @@ func DefaultConfig() *Config {
 
 	return &Config{
 		Agent: AgentConfig{
-			MaxFileSizeBytes: 1048576, // 1MB
+			MaxFileSizeBytes: 10 * 1024 * 1024, // 10MB
 			ConcurrentFiles:  concurrentFiles,
 			TokenLimit:       tokenLimit,
 		},
@@ -86,7 +86,7 @@ func DefaultConfig() *Config {
 			Provider:    "ollama",
 			Endpoint:    "http://localhost:11434",
 			Model:       "gemma3:4b", // https://ollama.com/library/gemma3
-			Temperature: 0.1,
+			Temperature: 0.4,
 			Timeout:     300, // 5 minutes for large batches
 		},
 		Filters: FilterConfig{

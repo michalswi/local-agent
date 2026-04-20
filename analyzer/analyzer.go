@@ -108,6 +108,12 @@ func (a *Analyzer) AnalyzeFile(path string, rootPath string) (*types.FileInfo, e
 		a.flagViolations(info, content)
 
 	case types.CategoryLarge:
+		// Skip large file content if token limit is too low
+		if a.config.Agent.TokenLimit < 8000 {
+			info.Summary = fmt.Sprintf("Large file skipped (AGENT_TOKEN_LIMIT=%d < 8000 required)", a.config.Agent.TokenLimit)
+			return info, nil
+		}
+
 		// Read full content for analysis
 		var content string
 		var err error
@@ -128,7 +134,13 @@ func (a *Analyzer) AnalyzeFile(path string, rootPath string) (*types.FileInfo, e
 		// Generate summary
 		info.Summary = a.generateSummary(info)
 
-		chunks, err := a.chunker.ChunkFile(path)
+		// For PDF/PCAP chunk already-extracted text; for others chunk raw file
+		var chunks []types.FileChunk
+		if info.Type == types.TypePDF || info.Type == types.TypePCAP {
+			chunks, err = a.chunker.ChunkContent(content)
+		} else {
+			chunks, err = a.chunker.ChunkFile(path)
+		}
 		if err != nil {
 			return info, fmt.Errorf("failed to chunk file: %w", err)
 		}

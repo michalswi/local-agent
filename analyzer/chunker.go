@@ -41,6 +41,59 @@ func (c *Chunker) ChunkFile(path string) ([]types.FileChunk, error) {
 	}
 }
 
+// ChunkContent chunks already-extracted text content (e.g. from PDF/PCAP) by lines.
+func (c *Chunker) ChunkContent(content string) ([]types.FileChunk, error) {
+	lines := strings.Split(content, "\n")
+	var chunks []types.FileChunk
+	var currentLines []string
+	lineNum := 1
+	chunkStartLine := 1
+	offset := int64(0)
+
+	for _, line := range lines {
+		currentLines = append(currentLines, line)
+
+		if len(currentLines) >= c.config.ChunkSize {
+			chunkContent := strings.Join(currentLines, "\n")
+			chunk := types.FileChunk{
+				Index:       len(chunks),
+				StartLine:   chunkStartLine,
+				EndLine:     lineNum,
+				StartOffset: offset,
+				EndOffset:   offset + int64(len(chunkContent)),
+				Content:     chunkContent,
+				TokenCount:  c.estimateTokens(chunkContent),
+			}
+			chunks = append(chunks, chunk)
+
+			overlapSize := c.config.Overlap
+			if overlapSize > len(currentLines) {
+				overlapSize = len(currentLines)
+			}
+			currentLines = currentLines[len(currentLines)-overlapSize:]
+			offset = chunk.EndOffset
+			chunkStartLine = lineNum - overlapSize + 1
+		}
+
+		lineNum++
+	}
+
+	if len(currentLines) > 0 {
+		chunkContent := strings.Join(currentLines, "\n")
+		chunks = append(chunks, types.FileChunk{
+			Index:       len(chunks),
+			StartLine:   chunkStartLine,
+			EndLine:     lineNum - 1,
+			StartOffset: offset,
+			EndOffset:   offset + int64(len(chunkContent)),
+			Content:     chunkContent,
+			TokenCount:  c.estimateTokens(chunkContent),
+		})
+	}
+
+	return chunks, nil
+}
+
 // chunkByLines splits a file into chunks by line count
 func (c *Chunker) chunkByLines(path string) ([]types.FileChunk, error) {
 	file, err := os.Open(path)

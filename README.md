@@ -22,6 +22,7 @@
 - 🌐 Remote Ollama support via `--host` flag (e.g., `--host 192.168.1.100:11434`)
 - 📦 Standalone binary with embedded assets - no external dependencies
 - 📊 PCAP file analysis - parse and analyze network traffic captures (.pcap, .pcapng, .cap)
+- 📄 PDF file analysis - extract and analyze text from PDF files up to 10MB (requires `AGENT_TOKEN_LIMIT >= 8000`)
 
 ## 🚀 Quick Start
 
@@ -98,15 +99,17 @@ curl https://ollama.ai/install.sh | sh
 ## Start ollama with recommended settings:
 # match OLLAMA_CONTEXT_LENGTH with your AGENT_TOKEN_LIMIT
 # match OLLAMA_NUM_PARALLEL with your AGENT_CONCURRENT_FILES
-OLLAMA_CONTEXT_LENGTH=8192 OLLAMA_NUM_PARALLEL=10 ollama serve
+OLLAMA_CONTEXT_LENGTH=32768 OLLAMA_NUM_PARALLEL=10 ollama serve
 
 # Set token limit and concurrent files
-AGENT_TOKEN_LIMIT=8000 AGENT_CONCURRENT_FILES=10 ./local-agent -dir . -task "..."
-AGENT_TOKEN_LIMIT=8000 AGENT_CONCURRENT_FILES=10 ./local-agent -dir . --interactive
+# AGENT_TOKEN_LIMIT >= 8000 is required to analyze large files (>100KB), including PDFs
+AGENT_TOKEN_LIMIT=30000 AGENT_CONCURRENT_FILES=10 ./local-agent -dir . -task "..."
+AGENT_TOKEN_LIMIT=30000 AGENT_CONCURRENT_FILES=10 ./local-agent -dir . --interactive
 
 
 ## OR
 # use defaults (context=4096, parallel=1)
+# Note: with default AGENT_TOKEN_LIMIT=4000, large files (>100KB) are skipped
 ollama serve
 
 # AGENT_TOKEN_LIMIT=4000
@@ -171,6 +174,8 @@ security:
 agent:
   token_limit: 32000  # (default is 4000)
   # Verify model's context window size and set accordingly
+  # Note: token_limit >= 8000 is required to analyze large files (>100KB)
+  # This includes PDF files (up to 10MB) and other large documents
 ```
 
 **Speed up analysis with concurrent processing:**
@@ -188,8 +193,7 @@ agent:
 **Adjust temperature for different tasks:**
 ```yaml
 llm:
-  temperature: 0.1  # Default - precise, deterministic (code analysis, security)
-  # temperature: 0.7  # Creative, varied (documentation, explanations)
+  temperature: 0.4  # default
 ```
 - **0.0-0.3**: Best for code analysis, security audits, bug finding (deterministic)
 - **0.4-0.7**: Good for documentation, explanations, suggestions (balanced)
