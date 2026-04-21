@@ -103,6 +103,9 @@ OLLAMA_CONTEXT_LENGTH=32768 OLLAMA_NUM_PARALLEL=10 ollama serve
 
 # Set token limit and concurrent files
 # AGENT_TOKEN_LIMIT >= 8000 is required to analyze large files (>100KB), including PDFs
+# AGENT_CONCURRENT_FILES controls how many files are sent to Ollama in parallel.
+# Each file is sent as a separate LLM request — AGENT_CONCURRENT_FILES=4 means
+# 4 requests run simultaneously, not 4 files in one request.
 AGENT_TOKEN_LIMIT=30000 AGENT_CONCURRENT_FILES=10 ./local-agent -dir . -task "..."
 AGENT_TOKEN_LIMIT=30000 AGENT_CONCURRENT_FILES=10 ./local-agent -dir . --interactive
 
