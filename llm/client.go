@@ -2,6 +2,7 @@ package llm
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,9 @@ import (
 
 	"local-agent/types"
 )
+
+//go:embed prompts/system.md
+var systemPrompt string
 
 // Client defines the interface for LLM interactions
 type Client interface {
@@ -167,12 +171,8 @@ func (c *OllamaClient) Analyze(task string, filesContent string, temperature flo
 	startTime := time.Now()
 
 	systemMessage := Message{
-		Role: "system",
-		Content: `You are an assistant that analyzes files and documents. Answer only from the provided files and task; if something is not in the provided files, say 'Not found in provided files' instead of guessing.
-Stay on the specific request (no generic advice unless asked). When user asks to 'show', 'copy', 'paste', or 'extract' specific content, provide the exact literal content first in fenced code blocks (for code/config) or quoted blocks (for text/data), then optionally add brief context.
-For code-related tasks: include concrete, actionable fixes. If the user asks for new code or applied suggestions, include updated code blocks or concise patch-style snippets that implement the recommendations.
-For analysis tasks: list findings with severity, then propose changes, then show any revised content. Keep the output concise and directly applicable.
-When you present code, wrap it in fenced markdown blocks with a language tag (e.g., ` + "```go ... ```" + `). Separate multiple files or sections with clear headings.`,
+		Role:    "system",
+		Content: systemPrompt,
 	}
 
 	userMessage := Message{

@@ -203,7 +203,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Process question
-	resp, answer, duration, err := s.processQuestion(userInput, activeFiles)
+	analysisResp, err := s.processQuestion(userInput, activeFiles)
 	if err != nil {
 		sendError(w, err.Error())
 		return
@@ -211,7 +211,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	msg := Message{
 		Role:      "assistant",
-		Content:   answer,
+		Content:   analysisResp.Response,
 		Timestamp: time.Now(),
 	}
 
@@ -219,7 +219,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.messages = append(s.messages, msg)
 	s.mu.Unlock()
 
-	s.saveSession(userInput, answer, resp, duration)
+	s.saveSession(userInput, analysisResp)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ChatResponse{
@@ -437,40 +437,109 @@ func (s *Server) getActiveFiles() []*types.FileInfo {
 	return nil
 }
 
-func (s *Server) processQuestion(question string, files []*types.FileInfo) (*llm.ChatResponse, string, time.Duration, error) {
-	// Build simple prompt with file contents
-	var prompt strings.Builder
-	prompt.WriteString(fmt.Sprintf("Question: %s\n\n", question))
-	prompt.WriteString("Files:\n\n")
+func (s *Server) processQuestion(question string, files []*types.FileInfo) (*types.AnalysisResponse, error) {
+	start := time.Now()
+	analyzerEngine := analyzer.NewAnalyzer(s.cfg)
 
-	for _, file := range files {
-		if file != nil && file.IsReadable && len(file.Content) > 0 {
-			prompt.WriteString(fmt.Sprintf("=== %s ===\n%s\n\n", file.RelPath, file.Content))
+	// Filter to readable files within token limit
+	var validFiles []*types.FileInfo
+	for _, f := range files {
+		if f != nil && f.IsReadable && len(f.Content) > 0 && f.TokenCount <= s.cfg.Agent.TokenLimit {
+			validFiles = append(validFiles, f)
 		}
 	}
 
-	// Call LLM
-	chatReq := &llm.ChatRequest{
-		Model: s.cfg.LLM.Model,
-		Messages: []llm.Message{
-			{
-				Role:    "user",
-				Content: prompt.String(),
-			},
-		},
-		Temperature: s.cfg.LLM.Temperature,
+	if len(validFiles) == 0 {
+		return nil, fmt.Errorf("no valid file content to analyze")
 	}
 
-	start := time.Now()
-	resp, err := s.llmClient.Chat(chatReq)
-	if err != nil {
-		return nil, "", 0, fmt.Errorf("LLM request failed: %w", err)
+	type fileResult struct {
+		idx      int
+		name     string
+		response string
+		tokens   int
+		err      error
 	}
 
-	return resp, resp.Message.Content, time.Since(start), nil
+	processFile := func(idx int, file *types.FileInfo) fileResult {
+		content := analyzerEngine.PrepareForLLM([]*types.FileInfo{file}, s.cfg.Agent.TokenLimit)
+		if len(content) < 100 {
+			return fileResult{idx: idx, name: file.RelPath, err: fmt.Errorf("no valid content")}
+		}
+		task := fmt.Sprintf("Analyze the file '%s'. %s", file.RelPath, question)
+		resp, err := s.llmClient.Analyze(task, content, s.cfg.LLM.Temperature)
+		if err != nil {
+			return fileResult{idx: idx, name: file.RelPath, err: err}
+		}
+		return fileResult{idx: idx, name: file.RelPath, response: resp.Response, tokens: resp.TokensUsed}
+	}
+
+	results := make([]fileResult, len(validFiles))
+
+	maxConcurrent := s.cfg.Agent.ConcurrentFiles
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+
+	if maxConcurrent == 1 || len(validFiles) == 1 {
+		for i, file := range validFiles {
+			results[i] = processFile(i, file)
+		}
+	} else {
+		type job struct {
+			idx  int
+			file *types.FileInfo
+		}
+		jobs := make(chan job, len(validFiles))
+		resCh := make(chan fileResult, len(validFiles))
+
+		var wg sync.WaitGroup
+		for w := 0; w < maxConcurrent; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := range jobs {
+					resCh <- processFile(j.idx, j.file)
+				}
+			}()
+		}
+		for i, file := range validFiles {
+			jobs <- job{i, file}
+		}
+		close(jobs)
+		go func() {
+			wg.Wait()
+			close(resCh)
+		}()
+		for r := range resCh {
+			results[r.idx] = r
+		}
+	}
+
+	// Aggregate results in order
+	var sb strings.Builder
+	fileTokens := make(map[string]int)
+	totalTokens := 0
+	for _, r := range results {
+		if r.err != nil {
+			sb.WriteString(fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v\n", r.name, r.err))
+		} else {
+			sb.WriteString(fmt.Sprintf("\n=== %s ===\n%s\n", r.name, strings.TrimSpace(r.response)))
+			fileTokens[r.name] = r.tokens
+			totalTokens += r.tokens
+		}
+	}
+
+	return &types.AnalysisResponse{
+		Response:   strings.TrimSpace(sb.String()),
+		Model:      s.cfg.LLM.Model,
+		TokensUsed: totalTokens,
+		FileTokens: fileTokens,
+		Duration:   time.Since(start),
+	}, nil
 }
 
-func (s *Server) saveSession(question, answer string, resp *llm.ChatResponse, duration time.Duration) {
+func (s *Server) saveSession(question string, resp *types.AnalysisResponse) {
 	if resp == nil {
 		return
 	}
@@ -482,10 +551,10 @@ func (s *Server) saveSession(question, answer string, resp *llm.ChatResponse, du
 		Task:       question,
 		Focus:      s.focusedPath,
 		Model:      s.model,
-		TokensUsed: resp.PromptEvalCount + resp.EvalCount,
-		Duration:   duration,
+		TokensUsed: resp.TokensUsed,
+		Duration:   resp.Duration,
 		Files:      sessionlog.FilesFromTokens(nil, s.focusedPath),
-		Response:   answer,
+		Response:   resp.Response,
 	}
 
 	if s.scanResult != nil {
