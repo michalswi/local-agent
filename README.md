@@ -59,9 +59,9 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 
 ### Standard Mode
 ```bash
-./local-agent -dir . -task "find security issues"
+./local-agent -dir . -task "give a one-line description of this file in format <filename>:<description>"
 
-./local-agent -dir <full_path_to_dir> -task "explain the architecture" --model codellama
+./local-agent -dir <full_path_to_dir> -task <prompt> --model codellama
 
 ./local-agent --focus ./cmd/main.go -task "review this file"
 
@@ -200,3 +200,27 @@ llm:
 ```
 - **0.0-0.3**: Best for code analysis, security audits, bug finding (deterministic)
 - **0.4-0.7**: Good for documentation, explanations, suggestions (balanced)
+
+## 📝 Session Logs
+
+After each run, a session log is saved to `~/.local-agent/` as a timestamped JSON file (e.g., `local-agent-20260424-114914.json`).
+
+Each session log contains:
+
+| Field | Description |
+|---|---|
+| `timestamp` | When the session started |
+| `mode` | `standalone` or `interactive` |
+| `directory` | Scanned directory path |
+| `task` | The user's prompt/question sent to the LLM |
+| `focus` | Focused file path (if `--focus` or `focus <file>` was used) |
+| `model` | Ollama model used |
+| `tokens_used` | Total tokens consumed |
+| `file_tokens` | Per-file token breakdown |
+| `duration` | Total processing time |
+| `files` | List of files included in the analysis |
+| `findings` | Security findings (if secret detection is enabled) |
+| `response` | The LLM's full response |
+| `scan_summary` | File scan stats (total files, filtered files, size, scan duration) |
+
+> **Note:** Session files persist across reboots in `~/.local-agent/`.

@@ -12,7 +12,13 @@ import (
 	"local-agent/types"
 )
 
-const sessionDir = "/tmp/local-agent"
+func defaultSessionDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "/tmp/local-agent"
+	}
+	return filepath.Join(home, ".local-agent")
+}
 
 type ScanSummary struct {
 	TotalFiles    int           `json:"total_files"`
@@ -49,6 +55,7 @@ func Save(record *Record) (string, error) {
 		record.Mode = "standalone"
 	}
 
+	sessionDir := defaultSessionDir()
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		return "", fmt.Errorf("create session dir: %w", err)
 	}
