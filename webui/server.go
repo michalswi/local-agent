@@ -32,6 +32,8 @@ type Server struct {
 	llmClient   *llm.OllamaClient
 	messages    []Message
 	mu          sync.RWMutex
+	progressCh  chan string
+	progressMu  sync.Mutex
 }
 
 // Message represents a chat message
@@ -102,6 +104,7 @@ func (s *Server) Start(port int) error {
 	http.HandleFunc("/api/messages", s.handleMessages)
 	http.HandleFunc("/api/rescan", s.handleRescan)
 	http.HandleFunc("/api/focus", s.handleFocus)
+	http.HandleFunc("/api/progress", s.handleProgress)
 
 	addr := fmt.Sprintf(":%d", port)
 	log.Printf("🌐 Web UI available at http://localhost%s\n", addr)
@@ -203,7 +206,19 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Process question
+	s.progressMu.Lock()
+	s.progressCh = make(chan string, 100)
+	s.progressMu.Unlock()
+
 	analysisResp, err := s.processQuestion(userInput, activeFiles)
+
+	s.progressMu.Lock()
+	if s.progressCh != nil {
+		close(s.progressCh)
+		s.progressCh = nil
+	}
+	s.progressMu.Unlock()
+
 	if err != nil {
 		sendError(w, err.Error())
 		return
@@ -437,9 +452,60 @@ func (s *Server) getActiveFiles() []*types.FileInfo {
 	return nil
 }
 
+func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	s.progressMu.Lock()
+	ch := s.progressCh
+	s.progressMu.Unlock()
+
+	if ch == nil {
+		fmt.Fprintf(w, "data: done\n\n")
+		flusher.Flush()
+		return
+	}
+
+	ctx := r.Context()
+	for {
+		select {
+		case msg, ok := <-ch:
+			if !ok {
+				fmt.Fprintf(w, "data: done\n\n")
+				flusher.Flush()
+				return
+			}
+			fmt.Fprintf(w, "data: %s\n\n", msg)
+			flusher.Flush()
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func (s *Server) processQuestion(question string, files []*types.FileInfo) (*types.AnalysisResponse, error) {
 	start := time.Now()
 	analyzerEngine := analyzer.NewAnalyzer(s.cfg)
+
+	s.progressMu.Lock()
+	progressCh := s.progressCh
+	s.progressMu.Unlock()
+
+	sendProgress := func(current, total int, name string) {
+		if progressCh != nil {
+			select {
+			case progressCh <- fmt.Sprintf("Reviewed %d/%d: %s", current, total, name):
+			default:
+			}
+		}
+	}
 
 	// Filter to readable files within token limit
 	var validFiles []*types.FileInfo
@@ -484,6 +550,7 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 	if maxConcurrent == 1 || len(validFiles) == 1 {
 		for i, file := range validFiles {
 			results[i] = processFile(i, file)
+			sendProgress(i+1, len(validFiles), file.RelPath)
 		}
 	} else {
 		type job struct {
@@ -511,7 +578,10 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 			wg.Wait()
 			close(resCh)
 		}()
+		completed := 0
 		for r := range resCh {
+			completed++
+			sendProgress(completed, len(validFiles), validFiles[r.idx].RelPath)
 			results[r.idx] = r
 		}
 	}

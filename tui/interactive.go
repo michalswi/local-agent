@@ -43,8 +43,9 @@ type InteractiveModel struct {
 	scrollPos int
 
 	// Control
-	quitting bool
-	err      error
+	quitting   bool
+	err        error
+	progressCh chan string
 }
 
 // Message represents a conversation message
@@ -159,12 +160,13 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.input.Reset()
 			m.processing = true
+			m.progressCh = make(chan string, 100)
 
 			// Generate and show processing status immediately
 			m.processingProgress = m.generateProcessingStatus(activeFiles)
 
 			// Process the question
-			return m, m.processQuestion(userInput, activeFiles)
+			return m, tea.Batch(m.processQuestion(userInput, activeFiles), waitForProgress(m.progressCh))
 
 		case tea.KeyUp:
 			m.scrollPos++
@@ -183,7 +185,8 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case processCompleteMsg:
 		m.processing = false
 		m.processingProgress = nil // Clear progress messages
-		m.scrollPos = 0            // Reset scroll to show latest message
+		m.progressCh = nil
+		m.scrollPos = 0 // Reset scroll to show latest message
 		if msg.err != nil {
 			m.messages = append(m.messages, Message{
 				Role:      "assistant",
@@ -206,6 +209,9 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.processingProgress) > 15 {
 				m.processingProgress = m.processingProgress[len(m.processingProgress)-15:]
 			}
+		}
+		if m.progressCh != nil {
+			return m, waitForProgress(m.progressCh)
 		}
 		return m, nil
 
@@ -503,15 +509,29 @@ File breakdown:`,
 	return false
 }
 
+func waitForProgress(ch chan string) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return processProgressMsg{message: msg}
+	}
+}
+
 func (m InteractiveModel) processQuestion(question string, files []*types.FileInfo) tea.Cmd {
 	currentFocusedPath := m.focusedPath
+	progressCh := m.progressCh
 
 	return func() tea.Msg {
 		// Prepare file context for LLM
 		analyzerEngine := analyzer.NewAnalyzer(m.cfg)
 
 		// Process files concurrently
-		result, processingInfo, err := m.analyzeBatchesForInteractive(files, question, analyzerEngine)
+		result, processingInfo, err := m.analyzeBatchesForInteractive(files, question, analyzerEngine, progressCh)
+		if progressCh != nil {
+			close(progressCh)
+		}
 		if err != nil {
 			return processCompleteMsg{
 				response: "",
@@ -764,7 +784,7 @@ type batchResultInteractive struct {
 	err      error
 }
 
-func (m InteractiveModel) analyzeBatchesForInteractive(files []*types.FileInfo, question string, analyzerEngine *analyzer.Analyzer) (*types.AnalysisResponse, string, error) {
+func (m InteractiveModel) analyzeBatchesForInteractive(files []*types.FileInfo, question string, analyzerEngine *analyzer.Analyzer, progressCh chan string) (*types.AnalysisResponse, string, error) {
 	var processingInfo strings.Builder
 	processingInfo.WriteString("📦 Processing files individually (one request per file)\n")
 
@@ -789,14 +809,14 @@ func (m InteractiveModel) analyzeBatchesForInteractive(files []*types.FileInfo, 
 
 	// If only 1 worker or 1 file, process sequentially
 	if maxConcurrent == 1 || totalFiles == 1 {
-		result, err := m.processSequentiallyForInteractive(batches, question, analyzerEngine)
+		result, err := m.processSequentiallyForInteractive(batches, question, analyzerEngine, progressCh)
 		return result, processingInfo.String(), err
 	}
 
 	processingInfo.WriteString(fmt.Sprintf("   Using %d concurrent workers\n", maxConcurrent))
 
 	// Process batches concurrently
-	result, err := m.processConcurrentlyForInteractive(batches, question, analyzerEngine, maxConcurrent)
+	result, err := m.processConcurrentlyForInteractive(batches, question, analyzerEngine, maxConcurrent, progressCh)
 	return result, processingInfo.String(), err
 }
 
@@ -823,16 +843,20 @@ func (m InteractiveModel) prepareBatchesForInteractive(files []*types.FileInfo, 
 	return batches
 }
 
-func (m InteractiveModel) processSequentiallyForInteractive(batches [][]*types.FileInfo, question string, analyzerEngine *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+func (m InteractiveModel) processSequentiallyForInteractive(batches [][]*types.FileInfo, question string, analyzerEngine *analyzer.Analyzer, progressCh chan string) (*types.AnalysisResponse, error) {
 	var allResponses []string
 	fileTokens := make(map[string]int)
 	var totalDuration time.Duration
 	model := ""
+	totalFiles := len(batches)
 
-	for _, batch := range batches {
+	for i, batch := range batches {
 		fileName := batch[0].RelPath
 
 		response, err := m.processBatchForInteractive(batch, question, analyzerEngine)
+		if progressCh != nil {
+			progressCh <- fmt.Sprintf("Reviewed %d/%d: %s", i+1, totalFiles, fileName)
+		}
 		if err != nil {
 			allResponses = append(allResponses, fmt.Sprintf("=== %s ===\n⚠️  FAILED: %v", fileName, err))
 		} else {
@@ -855,7 +879,7 @@ func (m InteractiveModel) processSequentiallyForInteractive(batches [][]*types.F
 	}, nil
 }
 
-func (m InteractiveModel) processConcurrentlyForInteractive(batches [][]*types.FileInfo, question string, analyzerEngine *analyzer.Analyzer, maxConcurrent int) (*types.AnalysisResponse, error) {
+func (m InteractiveModel) processConcurrentlyForInteractive(batches [][]*types.FileInfo, question string, analyzerEngine *analyzer.Analyzer, maxConcurrent int, progressCh chan string) (*types.AnalysisResponse, error) {
 	totalFiles := len(batches)
 
 	// Create file name mapping for tracking
@@ -906,9 +930,14 @@ func (m InteractiveModel) processConcurrentlyForInteractive(batches [][]*types.F
 	var totalDuration time.Duration
 	model := ""
 	failedFiles := make(map[int]error)
+	completed := 0
 
 	for result := range results {
+		completed++
 		fileName := fileNames[result.batchNum]
+		if progressCh != nil {
+			progressCh <- fmt.Sprintf("Reviewed %d/%d: %s", completed, totalFiles, fileName)
+		}
 		if result.err != nil {
 			failedFiles[result.batchNum] = result.err
 		} else {

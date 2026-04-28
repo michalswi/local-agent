@@ -367,9 +367,15 @@ const htmlTemplate = `<!DOCTYPE html>
             const loadingDiv = document.createElement('div');
             loadingDiv.className = 'loading';
             loadingDiv.id = 'loading';
-            loadingDiv.innerHTML = '<div class="spinner"></div><span>Processing...</span>';
+            loadingDiv.innerHTML = '<div class="spinner"></div><span id="loadingText">Processing...</span>';
             chatContainer.appendChild(loadingDiv);
             scrollToBottom();
+        }
+
+        // Update loading progress text
+        function updateLoadingText(text) {
+            const el = document.getElementById('loadingText');
+            if (el) el.textContent = text;
         }
 
         // Hide loading indicator
@@ -401,6 +407,18 @@ const htmlTemplate = `<!DOCTYPE html>
 
             showLoading();
 
+            // Open SSE progress stream
+            const evtSource = new EventSource('/api/progress');
+            evtSource.onmessage = function(e) {
+                if (e.data === 'done') {
+                    evtSource.close();
+                } else {
+                    updateLoadingText(e.data);
+                    scrollToBottom();
+                }
+            };
+            evtSource.onerror = function() { evtSource.close(); };
+
             try {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
@@ -411,6 +429,7 @@ const htmlTemplate = `<!DOCTYPE html>
                 });
 
                 const data = await response.json();
+                evtSource.close();
                 hideLoading();
 
                 if (data.success && data.message) {
