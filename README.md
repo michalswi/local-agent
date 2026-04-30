@@ -80,7 +80,7 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 ./local-agent -dir <full_path_to_dir> --interactive
 ```
 
-**Web UI:** Opens automatically at http://localhost:5050
+**Web UI:** Opens automatically at http://localhost:5050 — see [API.md](API.md) for the full REST API reference.
 
 **Commands:** `help`, `model <name>`, `rescan`, `stats`, `files`, `focus <path>`, `clear`, `quit`
 
