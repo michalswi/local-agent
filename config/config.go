@@ -129,6 +129,7 @@ func DefaultConfig() *Config {
 				"*.log",
 				"*.pdf",
 				"*.pcap",
+				"*.pcapng",
 			},
 		},
 		Security: SecurityConfig{

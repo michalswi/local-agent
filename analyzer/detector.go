@@ -185,7 +185,7 @@ func (d *Detector) ReadPDFContent(path string) (string, error) {
 	return buf.String(), nil
 }
 
-// ReadPCAPContent extracts information from a PCAP file
+// ReadPCAPContent extracts information from a PCAP/PCAPNG file
 func (d *Detector) ReadPCAPContent(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -193,15 +193,28 @@ func (d *Detector) ReadPCAPContent(path string) (string, error) {
 	}
 	defer f.Close()
 
-	reader, err := pcapgo.NewReader(f)
-	if err != nil {
-		return "", fmt.Errorf("failed to create PCAP reader: %w", err)
+	var packetSource *gopacket.PacketSource
+	if strings.ToLower(filepath.Ext(path)) == ".pcapng" {
+		ngReader, err := pcapgo.NewNgReader(f, pcapgo.DefaultNgReaderOptions)
+		if err != nil {
+			return "", fmt.Errorf("failed to create PCAPNG reader: %w", err)
+		}
+		packetSource = gopacket.NewPacketSource(ngReader, ngReader.LinkType())
+	} else {
+		reader, err := pcapgo.NewReader(f)
+		if err != nil {
+			return "", fmt.Errorf("failed to create PCAP reader: %w", err)
+		}
+		packetSource = gopacket.NewPacketSource(reader, reader.LinkType())
 	}
 
 	var builder strings.Builder
 	builder.WriteString("=== PCAP File Analysis ===\n\n")
+	return d.buildPCAPSummary(&builder, packetSource)
+}
 
-	packetSource := gopacket.NewPacketSource(reader, reader.LinkType())
+// buildPCAPSummary processes packets from a PacketSource and writes a summary
+func (d *Detector) buildPCAPSummary(builder *strings.Builder, packetSource *gopacket.PacketSource) (string, error) {
 
 	// Track statistics
 	totalPackets := 0
