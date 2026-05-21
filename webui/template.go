@@ -244,6 +244,33 @@ const htmlTemplate = `<!DOCTYPE html>
             color: var(--accent-color);
         }
 
+        .message-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 0.5rem;
+        }
+
+        .copy-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 0.75rem;
+            padding: 0.2rem 0.6rem;
+            transition: all 0.2s;
+        }
+
+        .copy-btn:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .copy-btn.copied {
+            color: #4caf50;
+            border-color: #4caf50;
+        }
+
         /* Scrollbar styling */
         ::-webkit-scrollbar {
             width: 10px;
@@ -359,6 +386,29 @@ const htmlTemplate = `<!DOCTYPE html>
             
             messageDiv.appendChild(contentDiv);
             messageDiv.appendChild(timeDiv);
+
+            if (role === 'assistant') {
+                const actionsDiv = document.createElement('div');
+                actionsDiv.className = 'message-actions';
+
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'copy-btn';
+                copyBtn.textContent = 'Copy';
+                copyBtn.addEventListener('click', () => {
+                    navigator.clipboard.writeText(content).then(() => {
+                        copyBtn.textContent = 'Copied!';
+                        copyBtn.classList.add('copied');
+                        setTimeout(() => {
+                            copyBtn.textContent = 'Copy';
+                            copyBtn.classList.remove('copied');
+                        }, 2000);
+                    });
+                });
+
+                actionsDiv.appendChild(copyBtn);
+                messageDiv.appendChild(actionsDiv);
+            }
+
             chatContainer.appendChild(messageDiv);
         }
 

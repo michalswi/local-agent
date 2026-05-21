@@ -201,6 +201,10 @@ llm:
 - **0.0-0.3**: Best for code analysis, security audits, bug finding (deterministic)
 - **0.4-0.7**: Good for documentation, explanations, suggestions (balanced)
 
+**Customize the system prompt:**
+
+The LLM's behavior is driven by [`llm/prompts/system.md`](llm/prompts/system.md). It sets the agent's tone, response style, and rules (e.g., "answer only from provided files", how to format code blocks, how to handle search tasks). Edit this file to change how the model responds to queries.
+
 ## 📝 Session Logs
 
 After each run, a session log is saved to `~/.local-agent/` as a timestamped JSON file (e.g., `local-agent-20260424-114914.json`).
