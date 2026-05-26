@@ -333,14 +333,30 @@ func (m InteractiveModel) renderMessages(maxHeight int) string {
 				content = strings.TrimSpace(content[:idx])
 			}
 
-			// Wrap and indent assistant message
+			// Wrap and render assistant message, detecting reasoning blocks
 			wrapped := m.wrapMessage(content, m.width-6)
+			inReasoning := false
 			for _, line := range strings.Split(wrapped, "\n") {
-				renderStyle := assistantMessageStyle
-				if isFileHeaderLine(line) {
-					renderStyle = fileHeaderStyle
+				trimmed := strings.TrimSpace(line)
+				if trimmed == "[reasoning]" {
+					inReasoning = true
+					lines = append(lines, reasoningHeaderStyle.Render("  ── 🧠 Reasoning "+strings.Repeat("─", max(0, m.width-22))))
+					continue
 				}
-				lines = append(lines, renderStyle.Render("  "+line))
+				if trimmed == "[/reasoning]" {
+					inReasoning = false
+					lines = append(lines, reasoningHeaderStyle.Render("  "+strings.Repeat("─", max(0, m.width-4))))
+					continue
+				}
+				if inReasoning {
+					lines = append(lines, reasoningLineStyle.Render("  "+line))
+				} else {
+					renderStyle := assistantMessageStyle
+					if isFileHeaderLine(line) {
+						renderStyle = fileHeaderStyle
+					}
+					lines = append(lines, renderStyle.Render("  "+line))
+				}
 			}
 
 			// Add metadata at the end if present
@@ -863,7 +879,7 @@ func (m InteractiveModel) processSequentiallyForInteractive(batches [][]*types.F
 	for i, batch := range batches {
 		fileName := batch[0].RelPath
 		if progressCh != nil && llm.IsThinkingModel(m.cfg.LLM.Model) {
-			progressCh <- fmt.Sprintf("🧠 Reasoning on: %s", fileName)
+			progressCh <- fmt.Sprintf("Analyzing: %s", fileName)
 		}
 
 		response, err := m.processBatchForInteractive(batch, question, analyzerEngine)
@@ -873,8 +889,10 @@ func (m InteractiveModel) processSequentiallyForInteractive(batches [][]*types.F
 		if err != nil {
 			allResponses = append(allResponses, fmt.Sprintf("=== %s ===\n⚠️  FAILED: %v", fileName, err))
 		} else {
-			// Trim leading/trailing whitespace from response
 			cleanResponse := strings.TrimSpace(response.Response)
+			if response.ThinkingContent != "" {
+				cleanResponse = "[reasoning]\n" + strings.TrimSpace(response.ThinkingContent) + "\n[/reasoning]\n" + cleanResponse
+			}
 			allResponses = append(allResponses, fmt.Sprintf("=== %s ===\n%s", fileName, cleanResponse))
 			fileTokens[fileName] = response.TokensUsed
 			totalDuration += response.Duration
@@ -913,7 +931,7 @@ func (m InteractiveModel) processConcurrentlyForInteractive(batches [][]*types.F
 			defer wg.Done()
 			for job := range jobs {
 				if progressCh != nil && llm.IsThinkingModel(m.cfg.LLM.Model) {
-					progressCh <- fmt.Sprintf("🧠 Reasoning on: %s", job.batch[0].RelPath)
+					progressCh <- fmt.Sprintf("Analyzing: %s", job.batch[0].RelPath)
 				}
 				response, err := m.processBatchForInteractive(job.batch, question, analyzerEngine)
 				results <- batchResultInteractive{
@@ -973,6 +991,9 @@ func (m InteractiveModel) processConcurrentlyForInteractive(batches [][]*types.F
 		if response, ok := fileResults[i]; ok {
 			// Successful file
 			cleanResponse := strings.TrimSpace(response.Response)
+			if response.ThinkingContent != "" {
+				cleanResponse = "[reasoning]\n" + strings.TrimSpace(response.ThinkingContent) + "\n[/reasoning]\n" + cleanResponse
+			}
 			allResponses = append(allResponses, fmt.Sprintf("=== %s ===\n%s", fileName, cleanResponse))
 		} else if err, failed := failedFiles[i]; failed {
 			// Failed file - include error message
