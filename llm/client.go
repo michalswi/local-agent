@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"local-agent/types"
@@ -29,12 +30,14 @@ type ChatRequest struct {
 	Stream      bool      `json:"stream"`
 	Temperature float64   `json:"temperature,omitempty"`
 	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Think       bool      `json:"think,omitempty"`
 }
 
 // Message represents a chat message
 type Message struct {
-	Role    string `json:"role"` // "user", "assistant", "system"
-	Content string `json:"content"`
+	Role     string `json:"role"`     // "user", "assistant", "system"
+	Content  string `json:"content"`
+	Thinking string `json:"thinking,omitempty"` // populated by Ollama when think:true
 }
 
 // ChatResponse represents a response from the LLM
@@ -132,6 +135,114 @@ func (c *OllamaClient) IsAvailable() bool {
 // GetModel returns the model name
 func (c *OllamaClient) GetModel() string {
 	return c.model
+}
+
+// IsThinkingModel reports whether the given model name is a reasoning/thinking model
+// that generates internal thought blocks before producing a final response.
+func IsThinkingModel(model string) bool {
+	return isQwen35Model(model) || isGemma4Model(model)
+}
+
+func isQwen35Model(model string) bool {
+	return strings.Contains(strings.ToLower(model), "qwen3.5")
+}
+
+func isGemma4Model(model string) bool {
+	return strings.Contains(strings.ToLower(model), "gemma4")
+}
+
+// extractThinkingBlock returns only the raw reasoning text (without surrounding tags).
+func extractThinkingBlock(content, model string) string {
+	if isQwen35Model(model) {
+		if start := strings.Index(content, "<think>"); start != -1 {
+			if end := strings.Index(content, "</think>"); end != -1 {
+				return strings.TrimSpace(content[start+len("<think>") : end])
+			}
+		}
+	}
+	if isGemma4Model(model) {
+		const openTag = "<|channel>thought\n"
+		if start := strings.Index(content, openTag); start != -1 {
+			if end := strings.Index(content, "<channel|>"); end != -1 {
+				return strings.TrimSpace(content[start+len(openTag) : end])
+			}
+		}
+	}
+	return ""
+}
+
+// stripThinkingContent removes the internal reasoning block from a model response,
+// returning only the final answer.
+//
+// Qwen3.5: strips <think>\n...\n</think> (and surrounding whitespace)
+// Gemma4:  strips <|channel>thought\n...<channel|>
+func stripThinkingContent(content, model string) string {
+	if isQwen35Model(model) {
+		if start := strings.Index(content, "<think>"); start != -1 {
+			if end := strings.Index(content, "</think>"); end != -1 {
+				return strings.TrimSpace(content[end+len("</think>"):])
+			}
+		}
+	}
+	if isGemma4Model(model) {
+		if strings.Contains(content, "<|channel>thought\n") {
+			if end := strings.Index(content, "<channel|>"); end != -1 {
+				return strings.TrimSpace(content[end+len("<channel|>"):])
+			}
+		}
+	}
+	return content
+}
+
+// AnalyzeThinking is like Analyze but enables thinking/reasoning mode for supported
+// models. For Gemma4 it injects <|think|> into the system prompt; for Qwen3.5 the
+// model thinks automatically. The reasoning block is stripped from Response and
+// returned separately in ThinkingContent.
+func (c *OllamaClient) AnalyzeThinking(task string, filesContent string, temperature float64) (*types.AnalysisResponse, error) {
+	startTime := time.Now()
+
+	systemContent := systemPrompt
+	if isGemma4Model(c.model) {
+		systemContent = "<|think|>\n" + systemContent
+	}
+
+	systemMessage := Message{
+		Role:    "system",
+		Content: systemContent,
+	}
+
+	userMessage := Message{
+		Role:    "user",
+		Content: fmt.Sprintf("**Task:** %s\n\nPlease complete this task based on the following files:\n\n%s", task, filesContent),
+	}
+
+	request := &ChatRequest{
+		Model:       c.model,
+		Messages:    []Message{systemMessage, userMessage},
+		Temperature: temperature,
+		Think:       true,
+	}
+
+	response, err := c.Chat(request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LLM response: %w", err)
+	}
+
+	// Prefer Ollama's dedicated thinking field (returned when think:true);
+	// fall back to parsing embedded tags for models that inline them.
+	thinkingContent := response.Message.Thinking
+	if thinkingContent == "" {
+		thinkingContent = extractThinkingBlock(response.Message.Content, c.model)
+	}
+	finalAnswer := stripThinkingContent(response.Message.Content, c.model)
+
+	return &types.AnalysisResponse{
+		Response:        finalAnswer,
+		ThinkingContent: thinkingContent,
+		Model:           response.Model,
+		TokensUsed:      response.PromptEvalCount + response.EvalCount,
+		Duration:        time.Since(startTime),
+	}, nil
 }
 
 // ListModels lists available models in Ollama

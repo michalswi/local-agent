@@ -99,6 +99,11 @@ var (
 			Foreground(warningColor).
 			Italic(true)
 
+	thinkingStyle = lipgloss.NewStyle().
+			Foreground(primaryColor).
+			Bold(true).
+			Italic(true)
+
 	goodbyeStyle = lipgloss.NewStyle().
 			Foreground(successColor).
 			Bold(true).

@@ -62,6 +62,7 @@ type StatusResponse struct {
 	Model       string `json:"model"`
 	TotalFiles  int    `json:"totalFiles"`
 	FocusedPath string `json:"focusedPath,omitempty"`
+	IsThinking  bool   `json:"isThinking"`
 }
 
 // NewServer creates a new web UI server
@@ -125,6 +126,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Model:       s.model,
 		TotalFiles:  s.scanResult.TotalFiles,
 		FocusedPath: s.focusedPath,
+		IsThinking:  llm.IsThinkingModel(s.model),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -463,17 +465,32 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.progressMu.Lock()
-	ch := s.progressCh
-	s.progressMu.Unlock()
-
-	if ch == nil {
-		fmt.Fprintf(w, "data: done\n\n")
-		flusher.Flush()
-		return
+	// Wait up to 3s for /api/chat to create the progress channel.
+	// Without this, the EventSource can connect before the chat handler
+	// has a chance to create progressCh, causing it to see nil and
+	// return "done" immediately — making all progress/thinking invisible.
+	ctx := r.Context()
+	deadline := time.Now().Add(3 * time.Second)
+	var ch chan string
+	for {
+		s.progressMu.Lock()
+		ch = s.progressCh
+		s.progressMu.Unlock()
+		if ch != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			fmt.Fprintf(w, "data: done\n\n")
+			flusher.Flush()
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 
-	ctx := r.Context()
 	for {
 		select {
 		case msg, ok := <-ch:
@@ -507,6 +524,24 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 		}
 	}
 
+	sendThinking := func(name string) {
+		if progressCh != nil {
+			select {
+			case progressCh <- fmt.Sprintf("Analyzing: %s", name):
+			default:
+			}
+		}
+	}
+
+	sendThinkLine := func(line string) {
+		if progressCh != nil {
+			select {
+			case progressCh <- "THINK:" + line:
+			default:
+			}
+		}
+	}
+
 	// Filter to readable files within token limit
 	var validFiles []*types.FileInfo
 	for _, f := range files {
@@ -523,6 +558,7 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 		idx      int
 		name     string
 		response string
+		thinking string
 		tokens   int
 		err      error
 	}
@@ -533,11 +569,17 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 			return fileResult{idx: idx, name: file.RelPath, err: fmt.Errorf("no valid content")}
 		}
 		task := fmt.Sprintf("Analyze the file '%s'. %s", file.RelPath, question)
-		resp, err := s.llmClient.Analyze(task, content, s.cfg.LLM.Temperature)
+		var resp *types.AnalysisResponse
+		var err error
+		if llm.IsThinkingModel(s.cfg.LLM.Model) {
+			resp, err = s.llmClient.AnalyzeThinking(task, content, s.cfg.LLM.Temperature)
+		} else {
+			resp, err = s.llmClient.Analyze(task, content, s.cfg.LLM.Temperature)
+		}
 		if err != nil {
 			return fileResult{idx: idx, name: file.RelPath, err: err}
 		}
-		return fileResult{idx: idx, name: file.RelPath, response: resp.Response, tokens: resp.TokensUsed}
+		return fileResult{idx: idx, name: file.RelPath, response: resp.Response, thinking: resp.ThinkingContent, tokens: resp.TokensUsed}
 	}
 
 	results := make([]fileResult, len(validFiles))
@@ -549,7 +591,13 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 
 	if maxConcurrent == 1 || len(validFiles) == 1 {
 		for i, file := range validFiles {
+			sendThinking(file.RelPath)
 			results[i] = processFile(i, file)
+			for _, line := range strings.Split(results[i].thinking, "\n") {
+				if strings.TrimSpace(line) != "" {
+					sendThinkLine(line)
+				}
+			}
 			sendProgress(i+1, len(validFiles), file.RelPath)
 		}
 	} else {
@@ -566,7 +614,14 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 			go func() {
 				defer wg.Done()
 				for j := range jobs {
-					resCh <- processFile(j.idx, j.file)
+					sendThinking(j.file.RelPath)
+					result := processFile(j.idx, j.file)
+					for _, line := range strings.Split(result.thinking, "\n") {
+						if strings.TrimSpace(line) != "" {
+							sendThinkLine(line)
+						}
+					}
+					resCh <- result
 				}
 			}()
 		}
@@ -594,7 +649,11 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 		if r.err != nil {
 			sb.WriteString(fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v\n", r.name, r.err))
 		} else {
-			sb.WriteString(fmt.Sprintf("\n=== %s ===\n%s\n", r.name, strings.TrimSpace(r.response)))
+			fileContent := strings.TrimSpace(r.response)
+			if r.thinking != "" {
+				fileContent = "[reasoning]\n" + strings.TrimSpace(r.thinking) + "\n[/reasoning]\n" + fileContent
+			}
+			sb.WriteString(fmt.Sprintf("\n=== %s ===\n%s\n", r.name, fileContent))
 			fileTokens[r.name] = r.tokens
 			totalTokens += r.tokens
 		}

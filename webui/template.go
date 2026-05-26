@@ -224,6 +224,10 @@ const htmlTemplate = `<!DOCTYPE html>
             animation: spin 1s linear infinite;
         }
 
+        .spinner.thinking {
+            border-top-color: #7D56F4;
+        }
+
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
@@ -271,6 +275,59 @@ const htmlTemplate = `<!DOCTYPE html>
             border-color: #4caf50;
         }
 
+        .reasoning-block {
+            margin: 0.5rem 0;
+            border: 1px solid rgba(125, 86, 244, 0.3);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .reasoning-block summary {
+            cursor: pointer;
+            padding: 0.4rem 0.75rem;
+            background: rgba(125, 86, 244, 0.1);
+            color: #9d79f5;
+            font-weight: 600;
+            font-size: 0.85rem;
+            user-select: none;
+            list-style: none;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .reasoning-block summary::-webkit-details-marker { display: none; }
+
+        .reasoning-block[open] summary { border-bottom: 1px solid rgba(125, 86, 244, 0.2); }
+
+        .reasoning-content {
+            padding: 0.75rem;
+            margin: 0;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: 'Menlo', 'Courier New', monospace;
+            background: rgba(0, 0, 0, 0.2);
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .reasoning-preview {
+            font-size: 0.78rem;
+            color: #9d79f5;
+            font-family: 'Menlo', 'Courier New', monospace;
+            max-height: 120px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin-top: 0.4rem;
+            padding: 0.4rem 0.5rem;
+            background: rgba(125, 86, 244, 0.06);
+            border-radius: 4px;
+            border-left: 2px solid rgba(125, 86, 244, 0.4);
+        }
+
         /* Scrollbar styling */
         ::-webkit-scrollbar {
             width: 10px;
@@ -311,6 +368,9 @@ const htmlTemplate = `<!DOCTYPE html>
                 <span class="status-label">Focus:</span>
                 <span id="focusedPath">-</span>
             </div>
+            <div class="status-item" id="thinkingIndicator" style="display: none;">
+                <span style="color: #7D56F4; font-weight: 600; font-style: italic;">🧠 Thinking Mode</span>
+            </div>
             </div>
         </div>
         <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>
@@ -338,6 +398,7 @@ const htmlTemplate = `<!DOCTYPE html>
         const messageInput = document.getElementById('messageInput');
         const sendButton = document.getElementById('sendButton');
         let isProcessing = false;
+        let isThinkingModel = false;
 
         // Load initial status
         async function loadStatus() {
@@ -347,6 +408,11 @@ const htmlTemplate = `<!DOCTYPE html>
                 document.getElementById('directory').textContent = data.directory;
                 document.getElementById('model').textContent = data.model;
                 document.getElementById('totalFiles').textContent = data.totalFiles;
+                isThinkingModel = data.isThinking || false;
+                const thinkingIndicator = document.getElementById('thinkingIndicator');
+                if (thinkingIndicator) {
+                    thinkingIndicator.style.display = isThinkingModel ? 'flex' : 'none';
+                }
                 
                 if (data.focusedPath) {
                     document.getElementById('focusedPath').textContent = data.focusedPath;
@@ -372,18 +438,55 @@ const htmlTemplate = `<!DOCTYPE html>
             }
         }
 
+        // Render message content, turning [reasoning]...[/reasoning] blocks into
+        // collapsible <details> elements and leaving the rest as plain text.
+        function renderContent(content, container) {
+            const re = /\[reasoning\]([\s\S]*?)\[\/reasoning\]\n?/g;
+            let lastIndex = 0;
+            let match;
+            let found = false;
+            while ((match = re.exec(content)) !== null) {
+                found = true;
+                const before = content.slice(lastIndex, match.index).trim();
+                if (before) {
+                    const div = document.createElement('div');
+                    div.style.whiteSpace = 'pre-wrap';
+                    div.textContent = before;
+                    container.appendChild(div);
+                }
+                const details = document.createElement('details');
+                details.className = 'reasoning-block';
+                const summary = document.createElement('summary');
+                summary.textContent = '\uD83E\uDDE0 Reasoning';
+                const pre = document.createElement('pre');
+                pre.className = 'reasoning-content';
+                pre.textContent = match[1].trim();
+                details.appendChild(summary);
+                details.appendChild(pre);
+                container.appendChild(details);
+                lastIndex = match.index + match[0].length;
+            }
+            const remaining = content.slice(lastIndex);
+            if (remaining.trim() || !found) {
+                const div = document.createElement('div');
+                div.style.whiteSpace = 'pre-wrap';
+                div.textContent = remaining || content;
+                container.appendChild(div);
+            }
+        }
+
         // Add message to chat
         function addMessage(role, content, timestamp) {
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message ' + role;
-            
+
             const contentDiv = document.createElement('div');
-            contentDiv.textContent = content;
-            
+            renderContent(content, contentDiv);
+
             const timeDiv = document.createElement('div');
             timeDiv.className = 'message-timestamp';
             timeDiv.textContent = new Date(timestamp).toLocaleTimeString();
-            
+
             messageDiv.appendChild(contentDiv);
             messageDiv.appendChild(timeDiv);
 
@@ -395,7 +498,8 @@ const htmlTemplate = `<!DOCTYPE html>
                 copyBtn.className = 'copy-btn';
                 copyBtn.textContent = 'Copy';
                 copyBtn.addEventListener('click', () => {
-                    navigator.clipboard.writeText(content).then(() => {
+                    const answerOnly = content.replace(/\[reasoning\][\s\S]*?\[\/reasoning\]\n?/g, '').trim();
+                    navigator.clipboard.writeText(answerOnly).then(() => {
                         copyBtn.textContent = 'Copied!';
                         copyBtn.classList.add('copied');
                         setTimeout(() => {
@@ -417,9 +521,28 @@ const htmlTemplate = `<!DOCTYPE html>
             const loadingDiv = document.createElement('div');
             loadingDiv.className = 'loading';
             loadingDiv.id = 'loading';
-            loadingDiv.innerHTML = '<div class="spinner"></div><span id="loadingText">Processing...</span>';
+            if (isThinkingModel) {
+                loadingDiv.innerHTML = '<div class="spinner thinking"></div>' +
+                    '<div style="display:flex;flex-direction:column;gap:0.3rem;flex:1;min-width:0">' +
+                    '<span id="loadingText">Analyzing...</span>' +
+                    '<div id="reasoningPreview" class="reasoning-preview" style="display:none"></div>' +
+                    '</div>';
+            } else {
+                loadingDiv.innerHTML = '<div class="spinner"></div><span id="loadingText">Analyzing...</span>';
+            }
             chatContainer.appendChild(loadingDiv);
             scrollToBottom();
+        }
+
+        // Append a thinking line to the live reasoning preview
+        function appendThinkLine(line) {
+            const preview = document.getElementById('reasoningPreview');
+            if (preview) {
+                preview.style.display = 'block';
+                preview.textContent += (preview.textContent ? '\n' : '') + line;
+                preview.scrollTop = preview.scrollHeight;
+                scrollToBottom();
+            }
         }
 
         // Update loading progress text
@@ -462,6 +585,8 @@ const htmlTemplate = `<!DOCTYPE html>
             evtSource.onmessage = function(e) {
                 if (e.data === 'done') {
                     evtSource.close();
+                } else if (e.data.startsWith('THINK:')) {
+                    appendThinkLine(e.data.substring(6));
                 } else {
                     updateLoadingText(e.data);
                     scrollToBottom();

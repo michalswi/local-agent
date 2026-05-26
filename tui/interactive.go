@@ -260,6 +260,9 @@ func (m InteractiveModel) View() string {
 	if m.focusedPath != "" {
 		headerText += fmt.Sprintf(" | Focus: %s", m.focusedPath)
 	}
+	if llm.IsThinkingModel(m.model) {
+		headerText += " | 🧠 Thinking"
+	}
 	header := headerStyle.Render(headerText)
 	s.WriteString(header + "\n\n")
 
@@ -276,7 +279,11 @@ func (m InteractiveModel) View() string {
 
 	// Input area
 	if m.processing {
-		s.WriteString(processingStyle.Render("⏳ Processing...") + "\n")
+		if llm.IsThinkingModel(m.model) {
+			s.WriteString(thinkingStyle.Render("🧠 Reasoning...") + "\n")
+		} else {
+			s.WriteString(processingStyle.Render("⏳ Processing...") + "\n")
+		}
 		// Show progress messages
 		if len(m.processingProgress) > 0 {
 			s.WriteString("\n" + subtleStyle.Render("Progress:") + "\n")
@@ -603,6 +610,9 @@ func (m InteractiveModel) processQuestion(question string, files []*types.FileIn
 // Simple helper to generate progress info that will be shown in processing area
 func (m InteractiveModel) generateProcessingStatus(filesPtrs []*types.FileInfo) []string {
 	var messages []string
+	if llm.IsThinkingModel(m.model) {
+		messages = append(messages, "🧠 Thinking mode enabled")
+	}
 	messages = append(messages, "📦 Processing files individually (one request per file)")
 
 	tokenLimit := m.cfg.Agent.TokenLimit
@@ -852,6 +862,9 @@ func (m InteractiveModel) processSequentiallyForInteractive(batches [][]*types.F
 
 	for i, batch := range batches {
 		fileName := batch[0].RelPath
+		if progressCh != nil && llm.IsThinkingModel(m.cfg.LLM.Model) {
+			progressCh <- fmt.Sprintf("🧠 Reasoning on: %s", fileName)
+		}
 
 		response, err := m.processBatchForInteractive(batch, question, analyzerEngine)
 		if progressCh != nil {
@@ -899,6 +912,9 @@ func (m InteractiveModel) processConcurrentlyForInteractive(batches [][]*types.F
 		go func(workerID int) {
 			defer wg.Done()
 			for job := range jobs {
+				if progressCh != nil && llm.IsThinkingModel(m.cfg.LLM.Model) {
+					progressCh <- fmt.Sprintf("🧠 Reasoning on: %s", job.batch[0].RelPath)
+				}
 				response, err := m.processBatchForInteractive(job.batch, question, analyzerEngine)
 				results <- batchResultInteractive{
 					batchNum: job.batchNum,
@@ -995,6 +1011,9 @@ func (m InteractiveModel) processBatchForInteractive(batch []*types.FileInfo, qu
 		actualQuestion = fmt.Sprintf("Analyze the file '%s'. %s", batch[0].RelPath, question)
 	}
 
+	if llm.IsThinkingModel(m.cfg.LLM.Model) {
+		return m.llmClient.AnalyzeThinking(actualQuestion, content, m.cfg.LLM.Temperature)
+	}
 	return m.llmClient.Analyze(actualQuestion, content, m.cfg.LLM.Temperature)
 }
 
