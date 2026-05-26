@@ -527,7 +527,7 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 	sendThinking := func(name string) {
 		if progressCh != nil {
 			select {
-			case progressCh <- fmt.Sprintf("Analyzing: %s", name):
+			case progressCh <- "ANALYZING:" + name:
 			default:
 			}
 		}

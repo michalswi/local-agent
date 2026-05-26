@@ -521,16 +521,33 @@ const htmlTemplate = `<!DOCTYPE html>
             const loadingDiv = document.createElement('div');
             loadingDiv.className = 'loading';
             loadingDiv.id = 'loading';
-            if (isThinkingModel) {
-                loadingDiv.innerHTML = '<div class="spinner thinking"></div>' +
-                    '<div style="display:flex;flex-direction:column;gap:0.3rem;flex:1;min-width:0">' +
-                    '<span id="loadingText">Analyzing...</span>' +
-                    '<div id="reasoningPreview" class="reasoning-preview" style="display:none"></div>' +
-                    '</div>';
-            } else {
-                loadingDiv.innerHTML = '<div class="spinner"></div><span id="loadingText">Analyzing...</span>';
-            }
+            const innerContent =
+                '<div style="display:flex;flex-direction:column;gap:0.4rem;flex:1;min-width:0">' +
+                    '<div style="display:flex;align-items:center;gap:0.5rem">' +
+                        '<div class="spinner' + (isThinkingModel ? ' thinking' : '') + '"></div>' +
+                        '<span id="loadingText">Analyzing...</span>' +
+                    '</div>' +
+                    '<ul id="activeFileList" style="list-style:none;margin:0;padding:0 0 0 0.25rem;display:none"></ul>' +
+                    (isThinkingModel ? '<div id="reasoningPreview" class="reasoning-preview" style="display:none"></div>' : '') +
+                '</div>';
+            loadingDiv.innerHTML = innerContent;
             chatContainer.appendChild(loadingDiv);
+            scrollToBottom();
+        }
+
+        const _activeFiles = new Set();
+
+        function _renderActiveList() {
+            const ul = document.getElementById('activeFileList');
+            if (!ul) return;
+            ul.innerHTML = '';
+            _activeFiles.forEach(function(name) {
+                const li = document.createElement('li');
+                li.style.cssText = 'font-size:0.78rem;color:var(--text-secondary);padding:0.1rem 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+                li.textContent = '\u2022 ' + name;
+                ul.appendChild(li);
+            });
+            ul.style.display = _activeFiles.size > 0 ? 'block' : 'none';
             scrollToBottom();
         }
 
@@ -587,6 +604,17 @@ const htmlTemplate = `<!DOCTYPE html>
                     evtSource.close();
                 } else if (e.data.startsWith('THINK:')) {
                     appendThinkLine(e.data.substring(6));
+                } else if (e.data.startsWith('ANALYZING:')) {
+                    const name = e.data.substring(10);
+                    _activeFiles.add(name);
+                    _renderActiveList();
+                } else if (e.data.startsWith('Reviewed ')) {
+                    // "Reviewed N/M: filename" — file done, remove from list
+                    const colon = e.data.indexOf(': ');
+                    if (colon !== -1) { _activeFiles.delete(e.data.substring(colon + 2)); }
+                    _renderActiveList();
+                    updateLoadingText(e.data);
+                    scrollToBottom();
                 } else {
                     updateLoadingText(e.data);
                     scrollToBottom();
