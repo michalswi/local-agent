@@ -116,25 +116,44 @@ func (c *OllamaClient) Chat(request *ChatRequest) (*ChatResponse, error) {
 
 // IsAvailable checks if Ollama is available
 func (c *OllamaClient) IsAvailable() bool {
+	return c.CheckAvailability() == nil
+}
+
+// CheckAvailability verifies Ollama can be reached at the configured endpoint.
+func (c *OllamaClient) CheckAvailability() error {
 	url := fmt.Sprintf("%s/api/tags", c.endpoint)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return false
+		return fmt.Errorf("failed to create availability request: %w", err)
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return false
+		return fmt.Errorf("failed to reach Ollama at %s: %w", c.endpoint, err)
 	}
 	defer resp.Body.Close()
 
-	return resp.StatusCode == http.StatusOK
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		bodyText := strings.TrimSpace(string(body))
+		if bodyText != "" {
+			return fmt.Errorf("unexpected response from Ollama at %s: %s (%s)", c.endpoint, resp.Status, bodyText)
+		}
+		return fmt.Errorf("unexpected response from Ollama at %s: %s", c.endpoint, resp.Status)
+	}
+
+	return nil
 }
 
 // GetModel returns the model name
 func (c *OllamaClient) GetModel() string {
 	return c.model
+}
+
+// GetEndpoint returns the configured Ollama endpoint.
+func (c *OllamaClient) GetEndpoint() string {
+	return c.endpoint
 }
 
 // IsThinkingModel reports whether the given model name is a reasoning/thinking model

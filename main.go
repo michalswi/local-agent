@@ -123,9 +123,12 @@ func main() {
 
 	// If interactive mode requested, start the interactive session
 	if *interactive {
+		ensureLLMAvailable(llmClient)
 		startInteractiveMode(absDir, cfg, llmClient, focusRel)
 		return
 	}
+
+	ensureLLMAvailable(llmClient)
 
 	// Run agent
 	fmt.Printf("🔍 Local Agent v%s\n", version)
@@ -706,8 +709,8 @@ func displayAnalysisResult(result *types.AnalysisResponse) {
 func checkLLMHealth(client *llm.OllamaClient) {
 	fmt.Printf("🏥 Checking LLM health...\n")
 
-	if client.IsAvailable() {
-		fmt.Printf("✅ LLM is available at %s\n", client.GetModel())
+	if err := client.CheckAvailability(); err == nil {
+		fmt.Printf("✅ LLM is available at %s\n", client.GetEndpoint())
 
 		// Try to list models
 		models, err := client.ListModels()
@@ -718,10 +721,22 @@ func checkLLMHealth(client *llm.OllamaClient) {
 			}
 		}
 	} else {
-		fmt.Printf("❌ LLM is not available\n")
+		fmt.Printf("❌ LLM is not available at %s\n", client.GetEndpoint())
+		fmt.Printf("   Error: %v\n", err)
 		fmt.Printf("   Make sure Ollama is running: ollama serve\n")
 		os.Exit(1)
 	}
+}
+
+func ensureLLMAvailable(client *llm.OllamaClient) {
+	fmt.Printf("🏥 Precheck: verifying Ollama at %s...\n", client.GetEndpoint())
+	if err := client.CheckAvailability(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Unable to reach Ollama at %s\n", client.GetEndpoint())
+		fmt.Fprintf(os.Stderr, "   %v\n", err)
+		fmt.Fprintf(os.Stderr, "   Start Ollama or use --host to point to a running instance.\n")
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Ollama is reachable\n\n")
 }
 
 func listAvailableModels(client *llm.OllamaClient) {
