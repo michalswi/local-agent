@@ -135,6 +135,61 @@ const htmlTemplate = `<!DOCTYPE html>
             word-wrap: break-word;
         }
 
+        .message-content {
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+            white-space: normal;
+        }
+
+        .message-text {
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .md-table-wrap {
+            overflow-x: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-primary);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+        }
+
+        .md-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+            white-space: normal;
+            min-width: 560px;
+        }
+
+        .md-table th,
+        .md-table td {
+            border-bottom: 1px solid var(--border-color);
+            border-right: 1px solid var(--border-color);
+            text-align: left;
+            vertical-align: top;
+            padding: 0.5rem 0.65rem;
+            line-height: 1.45;
+            word-break: break-word;
+            white-space: normal;
+        }
+
+        .md-table th:last-child,
+        .md-table td:last-child {
+            border-right: none;
+        }
+
+        .md-table thead th {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-weight: 700;
+        }
+
+        .md-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+
         .message.user {
             align-self: flex-end;
             background: var(--message-user-bg);
@@ -202,6 +257,28 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         #sendButton:disabled {
+            background: #555;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        #stopButton {
+            background: #c2410c;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 0.75rem 1.2rem;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        #stopButton:hover:not(:disabled) {
+            background: #9a3412;
+        }
+
+        #stopButton:disabled {
             background: #555;
             cursor: not-allowed;
             opacity: 0.5;
@@ -387,6 +464,7 @@ const htmlTemplate = `<!DOCTYPE html>
                 autocomplete="off"
             />
             <button id="sendButton">Send</button>
+            <button id="stopButton" disabled>Stop</button>
         </div>
         <div class="commands-hint">
             💡 To know more run: <code>help</code> • 🌐 Web UI: <code>http://localhost:5050</code>
@@ -397,6 +475,7 @@ const htmlTemplate = `<!DOCTYPE html>
         const chatContainer = document.getElementById('chatContainer');
         const messageInput = document.getElementById('messageInput');
         const sendButton = document.getElementById('sendButton');
+        const stopButton = document.getElementById('stopButton');
         let isProcessing = false;
         let isThinkingModel = false;
 
@@ -438,8 +517,147 @@ const htmlTemplate = `<!DOCTYPE html>
             }
         }
 
+        function splitMarkdownRow(line) {
+            let text = line.trim();
+            if (text.startsWith('|')) {
+                text = text.slice(1);
+            }
+            if (text.endsWith('|')) {
+                text = text.slice(0, -1);
+            }
+            return text.split('|').map(function(cell) {
+                return cell.trim();
+            });
+        }
+
+        function isMarkdownSeparator(line) {
+            const cells = splitMarkdownRow(line);
+            if (cells.length < 2) {
+                return false;
+            }
+
+            return cells.every(function(cell) {
+                if (!cell || cell.indexOf('-') === -1) {
+                    return false;
+                }
+                return /^:?-{3,}:?$/.test(cell);
+            });
+        }
+
+        function isMarkdownTableStart(lines, idx) {
+            if (idx + 1 >= lines.length) {
+                return false;
+            }
+
+            const header = lines[idx].trim();
+            if (!header || header.indexOf('|') === -1) {
+                return false;
+            }
+
+            return isMarkdownSeparator(lines[idx + 1]);
+        }
+
+        function renderMarkdownTable(lines, start, container) {
+            const headers = splitMarkdownRow(lines[start]);
+            const colCount = Math.max(headers.length, 2);
+
+            const tableWrap = document.createElement('div');
+            tableWrap.className = 'md-table-wrap';
+
+            const table = document.createElement('table');
+            table.className = 'md-table';
+
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            for (let i = 0; i < colCount; i++) {
+                const th = document.createElement('th');
+                th.textContent = (headers[i] || ('Column ' + (i + 1))).trim();
+                headerRow.appendChild(th);
+            }
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+            let i = start + 2;
+            while (i < lines.length) {
+                const line = lines[i];
+                const trimmed = line.trim();
+                if (!trimmed || trimmed.indexOf('|') === -1) {
+                    break;
+                }
+
+                const cells = splitMarkdownRow(trimmed);
+                const tr = document.createElement('tr');
+                for (let c = 0; c < colCount; c++) {
+                    const td = document.createElement('td');
+                    td.textContent = (cells[c] || '').trim();
+                    tr.appendChild(td);
+                }
+                tbody.appendChild(tr);
+                i++;
+            }
+
+            table.appendChild(tbody);
+            tableWrap.appendChild(table);
+            container.appendChild(tableWrap);
+
+            return i - start;
+        }
+
+        function appendTextBlock(lines, container) {
+            if (!lines || lines.length === 0) {
+                return;
+            }
+
+            const text = lines.join('\n');
+            if (!text.trim()) {
+                return;
+            }
+
+            const div = document.createElement('div');
+            div.className = 'message-text';
+            div.textContent = text;
+            container.appendChild(div);
+        }
+
+        function renderMarkdownAwareText(text, container) {
+            const lines = text.split('\n');
+            let plainBuffer = [];
+            let inCodeFence = false;
+            const codeFenceMarker = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
+
+            function flushText() {
+                appendTextBlock(plainBuffer, container);
+                plainBuffer = [];
+            }
+
+            for (let i = 0; i < lines.length; ) {
+                const line = lines[i];
+                const trimmed = line.trim();
+
+                if (trimmed.startsWith(codeFenceMarker)) {
+                    inCodeFence = !inCodeFence;
+                    plainBuffer.push(line);
+                    i++;
+                    continue;
+                }
+
+                if (!inCodeFence && isMarkdownTableStart(lines, i)) {
+                    flushText();
+                    const consumed = renderMarkdownTable(lines, i, container);
+                    i += consumed;
+                    continue;
+                }
+
+                plainBuffer.push(line);
+                i++;
+            }
+
+            flushText();
+        }
+
         // Render message content, turning [reasoning]...[/reasoning] blocks into
-        // collapsible <details> elements and leaving the rest as plain text.
+        // collapsible <details> elements and rendering markdown tables in answer text.
         function renderContent(content, container) {
             const re = /\[reasoning\]([\s\S]*?)\[\/reasoning\]\n?/g;
             let lastIndex = 0;
@@ -447,12 +665,9 @@ const htmlTemplate = `<!DOCTYPE html>
             let found = false;
             while ((match = re.exec(content)) !== null) {
                 found = true;
-                const before = content.slice(lastIndex, match.index).trim();
-                if (before) {
-                    const div = document.createElement('div');
-                    div.style.whiteSpace = 'pre-wrap';
-                    div.textContent = before;
-                    container.appendChild(div);
+                const before = content.slice(lastIndex, match.index);
+                if (before.trim()) {
+                    renderMarkdownAwareText(before, container);
                 }
                 const details = document.createElement('details');
                 details.className = 'reasoning-block';
@@ -468,10 +683,7 @@ const htmlTemplate = `<!DOCTYPE html>
             }
             const remaining = content.slice(lastIndex);
             if (remaining.trim() || !found) {
-                const div = document.createElement('div');
-                div.style.whiteSpace = 'pre-wrap';
-                div.textContent = remaining || content;
-                container.appendChild(div);
+                renderMarkdownAwareText(remaining || content, container);
             }
         }
 
@@ -481,7 +693,16 @@ const htmlTemplate = `<!DOCTYPE html>
             messageDiv.className = 'message ' + role;
 
             const contentDiv = document.createElement('div');
-            renderContent(content, contentDiv);
+            contentDiv.className = 'message-content';
+
+            if (role === 'assistant') {
+                renderContent(content, contentDiv);
+            } else {
+                const div = document.createElement('div');
+                div.className = 'message-text';
+                div.textContent = content;
+                contentDiv.appendChild(div);
+            }
 
             const timeDiv = document.createElement('div');
             timeDiv.className = 'message-timestamp';
@@ -588,7 +809,10 @@ const htmlTemplate = `<!DOCTYPE html>
 
             isProcessing = true;
             sendButton.disabled = true;
+            stopButton.disabled = false;
             messageInput.disabled = true;
+            _activeFiles.clear();
+            _renderActiveList();
 
             // Add user message
             addMessage('user', message, new Date().toISOString());
@@ -642,7 +866,12 @@ const htmlTemplate = `<!DOCTYPE html>
                     // Reload status in case focus or other settings changed
                     await loadStatus();
                 } else {
-                    addMessage('assistant', '❌ Error: ' + (data.error || 'Unknown error'), new Date().toISOString());
+                    const errText = data.error || 'Unknown error';
+                    if (errText.toLowerCase().includes('stop')) {
+                        addMessage('assistant', '⏹️ Request stopped.', new Date().toISOString());
+                    } else {
+                        addMessage('assistant', '❌ Error: ' + errText, new Date().toISOString());
+                    }
                 }
             } catch (error) {
                 hideLoading();
@@ -650,8 +879,31 @@ const htmlTemplate = `<!DOCTYPE html>
             } finally {
                 isProcessing = false;
                 sendButton.disabled = false;
+                stopButton.disabled = true;
+                stopButton.textContent = 'Stop';
                 messageInput.disabled = false;
                 messageInput.focus();
+                _activeFiles.clear();
+                _renderActiveList();
+            }
+        }
+
+        async function stopProcessing() {
+            if (!isProcessing) {
+                return;
+            }
+
+            stopButton.disabled = true;
+            stopButton.textContent = 'Stopping...';
+
+            try {
+                await fetch('/api/stop', {
+                    method: 'POST',
+                });
+            } catch (error) {
+                addMessage('assistant', '⚠️ Failed to stop request: ' + error.message, new Date().toISOString());
+                stopButton.disabled = false;
+                stopButton.textContent = 'Stop';
             }
         }
 
@@ -675,6 +927,7 @@ const htmlTemplate = `<!DOCTYPE html>
 
         // Event listeners
         sendButton.addEventListener('click', sendMessage);
+        stopButton.addEventListener('click', stopProcessing);
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 sendMessage();

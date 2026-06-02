@@ -1,7 +1,9 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -34,6 +36,10 @@ type Server struct {
 	mu          sync.RWMutex
 	progressCh  chan string
 	progressMu  sync.Mutex
+	runMu       sync.Mutex
+	runCancel   context.CancelFunc
+	runActiveID uint64
+	nextRunID   uint64
 }
 
 // Message represents a chat message
@@ -58,11 +64,12 @@ type ChatResponse struct {
 
 // StatusResponse represents the current status
 type StatusResponse struct {
-	Directory   string `json:"directory"`
-	Model       string `json:"model"`
-	TotalFiles  int    `json:"totalFiles"`
-	FocusedPath string `json:"focusedPath,omitempty"`
-	IsThinking  bool   `json:"isThinking"`
+	Directory    string `json:"directory"`
+	Model        string `json:"model"`
+	TotalFiles   int    `json:"totalFiles"`
+	FocusedPath  string `json:"focusedPath,omitempty"`
+	IsThinking   bool   `json:"isThinking"`
+	IsProcessing bool   `json:"isProcessing"`
 }
 
 // NewServer creates a new web UI server
@@ -106,6 +113,7 @@ func (s *Server) Start(port int) error {
 	http.HandleFunc("/api/rescan", s.handleRescan)
 	http.HandleFunc("/api/focus", s.handleFocus)
 	http.HandleFunc("/api/progress", s.handleProgress)
+	http.HandleFunc("/api/stop", s.handleStop)
 
 	addr := fmt.Sprintf(":%d", port)
 	log.Printf("🌐 Web UI available at http://localhost%s\n", addr)
@@ -122,11 +130,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	status := StatusResponse{
-		Directory:   s.directory,
-		Model:       s.model,
-		TotalFiles:  s.scanResult.TotalFiles,
-		FocusedPath: s.focusedPath,
-		IsThinking:  llm.IsThinkingModel(s.model),
+		Directory:    s.directory,
+		Model:        s.model,
+		TotalFiles:   s.scanResult.TotalFiles,
+		FocusedPath:  s.focusedPath,
+		IsThinking:   llm.IsThinkingModel(s.model),
+		IsProcessing: s.isProcessing(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -212,7 +221,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.progressCh = make(chan string, 100)
 	s.progressMu.Unlock()
 
-	analysisResp, err := s.processQuestion(userInput, activeFiles)
+	ctx, runID, err := s.beginRun(r.Context())
+	if err != nil {
+		s.progressMu.Lock()
+		if s.progressCh != nil {
+			close(s.progressCh)
+			s.progressCh = nil
+		}
+		s.progressMu.Unlock()
+		sendError(w, err.Error())
+		return
+	}
+	defer s.endRun(runID)
+
+	analysisResp, err := s.processQuestion(ctx, userInput, activeFiles)
 
 	s.progressMu.Lock()
 	if s.progressCh != nil {
@@ -222,6 +244,23 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.progressMu.Unlock()
 
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			msg := Message{
+				Role:      "assistant",
+				Content:   "⏹️ Analysis stopped.",
+				Timestamp: time.Now(),
+			}
+			s.mu.Lock()
+			s.messages = append(s.messages, msg)
+			s.mu.Unlock()
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(ChatResponse{
+				Success: true,
+				Message: &msg,
+			})
+			return
+		}
 		sendError(w, err.Error())
 		return
 	}
@@ -243,6 +282,66 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Success: true,
 		Message: &msg,
 	})
+}
+
+func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.stopProcessing() {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChatResponse{Success: true})
+		return
+	}
+
+	sendError(w, "No active analysis to stop")
+}
+
+func (s *Server) beginRun(parent context.Context) (context.Context, uint64, error) {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+
+	if s.runCancel != nil {
+		return nil, 0, fmt.Errorf("analysis is already running")
+	}
+
+	ctx, cancel := context.WithCancel(parent)
+	s.nextRunID++
+	s.runActiveID = s.nextRunID
+	s.runCancel = cancel
+
+	return ctx, s.runActiveID, nil
+}
+
+func (s *Server) endRun(runID uint64) {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+
+	if s.runActiveID == runID {
+		s.runCancel = nil
+		s.runActiveID = 0
+	}
+}
+
+func (s *Server) stopProcessing() bool {
+	s.runMu.Lock()
+	cancel := s.runCancel
+	s.runMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+		return true
+	}
+
+	return false
+}
+
+func (s *Server) isProcessing() bool {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	return s.runCancel != nil
 }
 
 func (s *Server) handleRescan(w http.ResponseWriter, r *http.Request) {
@@ -507,7 +606,7 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) processQuestion(question string, files []*types.FileInfo) (*types.AnalysisResponse, error) {
+func (s *Server) processQuestion(ctx context.Context, question string, files []*types.FileInfo) (*types.AnalysisResponse, error) {
 	start := time.Now()
 	analyzerEngine := analyzer.NewAnalyzer(s.cfg)
 
@@ -564,6 +663,10 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 	}
 
 	processFile := func(idx int, file *types.FileInfo) fileResult {
+		if err := ctx.Err(); err != nil {
+			return fileResult{idx: idx, name: file.RelPath, err: err}
+		}
+
 		content := analyzerEngine.PrepareForLLM([]*types.FileInfo{file}, s.cfg.Agent.TokenLimit)
 		if len(content) < 100 {
 			return fileResult{idx: idx, name: file.RelPath, err: fmt.Errorf("no valid content")}
@@ -572,9 +675,9 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 		var resp *types.AnalysisResponse
 		var err error
 		if llm.IsThinkingModel(s.cfg.LLM.Model) {
-			resp, err = s.llmClient.AnalyzeThinking(task, content, s.cfg.LLM.Temperature)
+			resp, err = s.llmClient.AnalyzeThinkingWithContext(ctx, task, content, s.cfg.LLM.Temperature)
 		} else {
-			resp, err = s.llmClient.Analyze(task, content, s.cfg.LLM.Temperature)
+			resp, err = s.llmClient.AnalyzeWithContext(ctx, task, content, s.cfg.LLM.Temperature)
 		}
 		if err != nil {
 			return fileResult{idx: idx, name: file.RelPath, err: err}
@@ -591,8 +694,14 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 
 	if maxConcurrent == 1 || len(validFiles) == 1 {
 		for i, file := range validFiles {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			sendThinking(file.RelPath)
 			results[i] = processFile(i, file)
+			if errors.Is(results[i].err, context.Canceled) {
+				return nil, context.Canceled
+			}
 			for _, line := range strings.Split(results[i].thinking, "\n") {
 				if strings.TrimSpace(line) != "" {
 					sendThinkLine(line)
@@ -614,6 +723,10 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 			go func() {
 				defer wg.Done()
 				for j := range jobs {
+					if err := ctx.Err(); err != nil {
+						resCh <- fileResult{idx: j.idx, name: j.file.RelPath, err: err}
+						continue
+					}
 					sendThinking(j.file.RelPath)
 					result := processFile(j.idx, j.file)
 					for _, line := range strings.Split(result.thinking, "\n") {
@@ -635,10 +748,17 @@ func (s *Server) processQuestion(question string, files []*types.FileInfo) (*typ
 		}()
 		completed := 0
 		for r := range resCh {
+			if errors.Is(r.err, context.Canceled) {
+				return nil, context.Canceled
+			}
 			completed++
 			sendProgress(completed, len(validFiles), validFiles[r.idx].RelPath)
 			results[r.idx] = r
 		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	// Aggregate results in order
