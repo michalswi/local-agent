@@ -89,6 +89,8 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 
 **Focus:** `focus <filename>` limits analysis to a single scanned file until you run `focus clear`.
 
+**Session Prompt:** In Web UI, open the collapsible **Session Prompt** panel to add optional instructions applied to every request in the current interactive session. Use **Apply** to enable or **Clear** to disable; it is not persisted after the session ends.
+
 
 ## 🔧 Ollama Setup
 
