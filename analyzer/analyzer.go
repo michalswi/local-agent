@@ -21,6 +21,21 @@ type Analyzer struct {
 	tokenizer *llm.Tokenizer
 }
 
+func (a *Analyzer) readContentByType(path string, fileType types.FileType) (string, error) {
+	switch fileType {
+	case types.TypePDF:
+		return a.detector.ReadPDFContent(path)
+	case types.TypeDOC:
+		return a.detector.ReadDOCContent(path)
+	case types.TypeDOCX:
+		return a.detector.ReadDOCXContent(path)
+	case types.TypePCAP:
+		return a.detector.ReadPCAPContent(path)
+	default:
+		return a.detector.ReadContent(path, 0)
+	}
+}
+
 // NewAnalyzer creates a new file analyzer
 func NewAnalyzer(cfg *config.Config) *Analyzer {
 	return &Analyzer{
@@ -66,16 +81,7 @@ func (a *Analyzer) AnalyzeFile(path string, rootPath string) (*types.FileInfo, e
 	switch info.Category {
 	case types.CategorySmall:
 		// Read full content
-		var content string
-		var err error
-
-		if info.Type == types.TypePDF {
-			content, err = a.detector.ReadPDFContent(path)
-		} else if info.Type == types.TypePCAP {
-			content, err = a.detector.ReadPCAPContent(path)
-		} else {
-			content, err = a.detector.ReadContent(path, 0)
-		}
+		content, err := a.readContentByType(path, info.Type)
 
 		if err != nil {
 			return info, fmt.Errorf("failed to read content: %w", err)
@@ -86,16 +92,7 @@ func (a *Analyzer) AnalyzeFile(path string, rootPath string) (*types.FileInfo, e
 
 	case types.CategoryMedium:
 		// Read full content but prepare for chunking
-		var content string
-		var err error
-
-		if info.Type == types.TypePDF {
-			content, err = a.detector.ReadPDFContent(path)
-		} else if info.Type == types.TypePCAP {
-			content, err = a.detector.ReadPCAPContent(path)
-		} else {
-			content, err = a.detector.ReadContent(path, 0)
-		}
+		content, err := a.readContentByType(path, info.Type)
 
 		if err != nil {
 			return info, fmt.Errorf("failed to read content: %w", err)
@@ -115,16 +112,7 @@ func (a *Analyzer) AnalyzeFile(path string, rootPath string) (*types.FileInfo, e
 		}
 
 		// Read full content for analysis
-		var content string
-		var err error
-
-		if info.Type == types.TypePDF {
-			content, err = a.detector.ReadPDFContent(path)
-		} else if info.Type == types.TypePCAP {
-			content, err = a.detector.ReadPCAPContent(path)
-		} else {
-			content, err = a.detector.ReadContent(path, 0)
-		}
+		content, err := a.readContentByType(path, info.Type)
 
 		if err != nil {
 			return info, fmt.Errorf("failed to read content: %w", err)
@@ -134,9 +122,9 @@ func (a *Analyzer) AnalyzeFile(path string, rootPath string) (*types.FileInfo, e
 		// Generate summary
 		info.Summary = a.generateSummary(info)
 
-		// For PDF/PCAP chunk already-extracted text; for others chunk raw file
+		// For formats requiring extraction (PDF/DOC/DOCX/PCAP), chunk extracted text; for others chunk raw file
 		var chunks []types.FileChunk
-		if info.Type == types.TypePDF || info.Type == types.TypePCAP {
+		if info.Type == types.TypePDF || info.Type == types.TypeDOC || info.Type == types.TypeDOCX || info.Type == types.TypePCAP {
 			chunks, err = a.chunker.ChunkContent(content)
 		} else {
 			chunks, err = a.chunker.ChunkFile(path)
@@ -357,6 +345,8 @@ func detectLanguage(ext string) string {
 		".scala":  "Scala",
 		".sh":     "Shell",
 		".sql":    "SQL",
+		".doc":    "Word Document",
+		".docx":   "Word Document",
 		".pcap":   "Network Capture",
 		".pcapng": "Network Capture",
 		".cap":    "Network Capture",
@@ -384,6 +374,8 @@ func getLanguageIdentifier(ext string) string {
 		".yaml":   "yaml",
 		".yml":    "yaml",
 		".xml":    "xml",
+		".doc":    "text",
+		".docx":   "text",
 		".pcap":   "text",
 		".pcapng": "text",
 		".cap":    "text",

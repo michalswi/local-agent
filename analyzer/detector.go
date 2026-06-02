@@ -1,12 +1,16 @@
 package analyzer
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -33,7 +37,7 @@ func (d *Detector) DetectFile(path string) (*types.FileInfo, error) {
 		return nil, fmt.Errorf("failed to stat file: %w", err)
 	}
 
-	ext := filepath.Ext(path)
+	ext := strings.ToLower(filepath.Ext(path))
 	size := info.Size()
 
 	fileInfo := &types.FileInfo{
@@ -61,13 +65,15 @@ func (d *Detector) DetectFile(path string) (*types.FileInfo, error) {
 	}
 
 	fileInfo.Type = fileType
-	fileInfo.IsReadable = (fileType == types.TypeText || fileType == types.TypePDF || fileType == types.TypePCAP)
+	fileInfo.IsReadable = (fileType == types.TypeText || fileType == types.TypePDF || fileType == types.TypeDOC || fileType == types.TypeDOCX || fileType == types.TypePCAP)
 
 	return fileInfo, nil
 }
 
 // detectFileType determines the type of a file
 func (d *Detector) detectFileType(path, ext string) (types.FileType, error) {
+	ext = strings.ToLower(ext)
+
 	// Check by extension first
 	textExts := []string{
 		".txt", ".md", ".go", ".py", ".js", ".ts", ".java", ".c", ".cpp", ".h",
@@ -117,6 +123,16 @@ func (d *Detector) detectFileType(path, ext string) (types.FileType, error) {
 	// Check for PDF files
 	if ext == ".pdf" {
 		return types.TypePDF, nil
+	}
+
+	// Check for DOC files
+	if ext == ".doc" {
+		return types.TypeDOC, nil
+	}
+
+	// Check for DOCX files
+	if ext == ".docx" {
+		return types.TypeDOCX, nil
 	}
 
 	// Check for PCAP files
@@ -183,6 +199,174 @@ func (d *Detector) ReadPDFContent(path string) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+// ReadDOCXContent extracts text from a DOCX file.
+func (d *Detector) ReadDOCXContent(path string) (string, error) {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to open DOCX: %w", err)
+	}
+	defer reader.Close()
+
+	var parts []string
+	for _, file := range reader.File {
+		name := strings.ToLower(file.Name)
+		if isDOCXTextPart(name) {
+			parts = append(parts, file.Name)
+		}
+	}
+
+	if len(parts) == 0 {
+		return "", fmt.Errorf("no readable document XML parts found in DOCX")
+	}
+
+	sort.Strings(parts)
+
+	var content strings.Builder
+	for _, partName := range parts {
+		var partFile *zip.File
+		for _, file := range reader.File {
+			if file.Name == partName {
+				partFile = file
+				break
+			}
+		}
+		if partFile == nil {
+			continue
+		}
+
+		rc, err := partFile.Open()
+		if err != nil {
+			return "", fmt.Errorf("failed to open DOCX part %s: %w", partName, err)
+		}
+
+		partText, parseErr := extractDOCXText(rc)
+		closeErr := rc.Close()
+		if parseErr != nil {
+			return "", fmt.Errorf("failed to parse DOCX part %s: %w", partName, parseErr)
+		}
+		if closeErr != nil {
+			return "", fmt.Errorf("failed to close DOCX part %s: %w", partName, closeErr)
+		}
+
+		partText = strings.TrimSpace(partText)
+		if partText == "" {
+			continue
+		}
+
+		if content.Len() > 0 {
+			content.WriteString("\n\n")
+		}
+		content.WriteString(partText)
+	}
+
+	finalText := strings.TrimSpace(content.String())
+	if finalText == "" {
+		return "", fmt.Errorf("no text content extracted from DOCX")
+	}
+
+	return finalText, nil
+}
+
+func isDOCXTextPart(name string) bool {
+	if name == "word/document.xml" ||
+		name == "word/footnotes.xml" ||
+		name == "word/endnotes.xml" ||
+		name == "word/comments.xml" {
+		return true
+	}
+
+	if strings.HasPrefix(name, "word/header") && strings.HasSuffix(name, ".xml") {
+		return true
+	}
+
+	if strings.HasPrefix(name, "word/footer") && strings.HasSuffix(name, ".xml") {
+		return true
+	}
+
+	return false
+}
+
+func extractDOCXText(r io.Reader) (string, error) {
+	decoder := xml.NewDecoder(r)
+	var builder strings.Builder
+	lastWasNewline := true
+
+	appendNewline := func() {
+		if !lastWasNewline {
+			builder.WriteString("\n")
+			lastWasNewline = true
+		}
+	}
+
+	for {
+		tok, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch strings.ToLower(t.Name.Local) {
+			case "t":
+				var text string
+				if err := decoder.DecodeElement(&text, &t); err != nil {
+					return "", err
+				}
+				if text != "" {
+					builder.WriteString(text)
+					lastWasNewline = false
+				}
+			case "tab":
+				builder.WriteString("\t")
+				lastWasNewline = false
+			case "br", "cr":
+				appendNewline()
+			}
+
+		case xml.EndElement:
+			if strings.ToLower(t.Name.Local) == "p" {
+				appendNewline()
+			}
+		}
+	}
+
+	return strings.TrimSpace(builder.String()), nil
+}
+
+// ReadDOCContent extracts text from a legacy DOC file.
+// It tries platform/system converters in order.
+func (d *Detector) ReadDOCContent(path string) (string, error) {
+	converters := []struct {
+		name string
+		args []string
+	}{
+		{name: "textutil", args: []string{"-convert", "txt", "-stdout", path}},
+		{name: "antiword", args: []string{path}},
+	}
+
+	var failures []string
+	for _, c := range converters {
+		output, err := exec.Command(c.name, c.args...).CombinedOutput()
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s failed: %v", c.name, err))
+			continue
+		}
+
+		text := strings.TrimSpace(string(output))
+		if text == "" {
+			failures = append(failures, fmt.Sprintf("%s produced empty output", c.name))
+			continue
+		}
+
+		return text, nil
+	}
+
+	return "", fmt.Errorf("failed to extract text from DOC: %s", strings.Join(failures, "; "))
 }
 
 // ReadPCAPContent extracts information from a PCAP/PCAPNG file
@@ -471,6 +655,8 @@ func (d *Detector) GetMimeType(path string) string {
 		".png":    "image/png",
 		".gif":    "image/gif",
 		".pdf":    "application/pdf",
+		".doc":    "application/msword",
+		".docx":   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 		".zip":    "application/zip",
 		".pcap":   "application/vnd.tcpdump.pcap",
 		".pcapng": "application/x-pcapng",

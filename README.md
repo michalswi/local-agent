@@ -23,6 +23,7 @@
 - 📦 Standalone binary with embedded assets - no external dependencies
 - 📊 PCAP file analysis - parse and analyze network traffic captures (.pcap, .pcapng, .cap)
 - 📄 PDF file analysis - extract and analyze text from PDF files up to 10MB (requires `AGENT_TOKEN_LIMIT >= 8000`)
+- 📄 DOC/DOCX file analysis - extract and analyze text from Word documents (.doc, .docx) up to 10MB (requires `AGENT_TOKEN_LIMIT >= 8000` for large files)
 
 ## 🚀 Quick Start
 
@@ -123,7 +124,7 @@ ollama serve
 
 ## 📁 File Filtering
 
-Default filters in [config/config.go](config/config.go): supports common source files (`.go`, `.js`, `.py`, etc.), configs (`.yaml`, `.json`), and docs (`.pdf`, `.md`, `.txt`). Excludes `node_modules`, `.git`, `.env*`, build artifacts.
+Default filters in [config/config.go](config/config.go): supports common source files (`.go`, `.js`, `.py`, etc.), configs (`.yaml`, `.json`), and docs (`.pdf`, `.doc`, `.docx`, `.md`, `.txt`). Excludes `node_modules`, `.git`, `.env*`, build artifacts.
 
 See [examples/](examples/) directory for sample configuration files:
 - [config.yaml](examples/config.yaml) - Full configuration example with comments
