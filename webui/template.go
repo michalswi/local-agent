@@ -318,6 +318,93 @@ const htmlTemplate = `<!DOCTYPE html>
             margin-top: 0.5rem;
         }
 
+        .session-prompt-panel {
+            max-width: 1200px;
+            margin: 0 auto 0.85rem;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-tertiary);
+        }
+
+        .session-prompt-panel summary {
+            cursor: pointer;
+            padding: 0.65rem 0.9rem;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            user-select: none;
+        }
+
+        .session-prompt-body {
+            padding: 0.75rem 0.9rem 0.9rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        #sessionPromptInput {
+            width: 100%;
+            min-height: 110px;
+            resize: vertical;
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 0.92rem;
+            font-family: inherit;
+            line-height: 1.4;
+            padding: 0.65rem 0.75rem;
+            margin-bottom: 0.6rem;
+        }
+
+        #sessionPromptInput:focus {
+            outline: none;
+            border-color: var(--accent-color);
+        }
+
+        .session-prompt-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            flex-wrap: wrap;
+        }
+
+        .session-prompt-btn {
+            border: none;
+            border-radius: 6px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 0.42rem 0.75rem;
+        }
+
+        .session-prompt-btn.apply {
+            background: var(--accent-color);
+            color: #fff;
+        }
+
+        .session-prompt-btn.apply:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+
+        .session-prompt-btn.clear {
+            background: transparent;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .session-prompt-btn.clear:hover:not(:disabled) {
+            background: var(--bg-secondary);
+        }
+
+        .session-prompt-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .session-prompt-state {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
         .commands-hint code {
             background: var(--bg-input);
             padding: 0.2rem 0.4rem;
@@ -448,6 +535,10 @@ const htmlTemplate = `<!DOCTYPE html>
             <div class="status-item" id="thinkingIndicator" style="display: none;">
                 <span style="color: #7D56F4; font-weight: 600; font-style: italic;">🧠 Thinking Mode</span>
             </div>
+            <div class="status-item" id="sessionPromptIndicator" style="display: none;">
+                <span class="status-label">Session Prompt:</span>
+                <span>active</span>
+            </div>
             </div>
         </div>
         <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>
@@ -456,6 +547,17 @@ const htmlTemplate = `<!DOCTYPE html>
     <div class="chat-container" id="chatContainer"></div>
 
     <div class="input-container">
+        <details class="session-prompt-panel" id="sessionPromptPanel">
+            <summary>Session Prompt (applies to every message in this session)</summary>
+            <div class="session-prompt-body">
+                <textarea id="sessionPromptInput" placeholder="Optional extra instructions for this open session. Leave empty to disable."></textarea>
+                <div class="session-prompt-actions">
+                    <button id="sessionPromptApply" class="session-prompt-btn apply">Apply</button>
+                    <button id="sessionPromptClear" class="session-prompt-btn clear">Clear</button>
+                    <span id="sessionPromptState" class="session-prompt-state">Session prompt is not set.</span>
+                </div>
+            </div>
+        </details>
         <div class="input-wrapper">
             <input 
                 type="text" 
@@ -476,8 +578,14 @@ const htmlTemplate = `<!DOCTYPE html>
         const messageInput = document.getElementById('messageInput');
         const sendButton = document.getElementById('sendButton');
         const stopButton = document.getElementById('stopButton');
+        const sessionPromptPanel = document.getElementById('sessionPromptPanel');
+        const sessionPromptInput = document.getElementById('sessionPromptInput');
+        const sessionPromptApplyButton = document.getElementById('sessionPromptApply');
+        const sessionPromptClearButton = document.getElementById('sessionPromptClear');
+        const sessionPromptState = document.getElementById('sessionPromptState');
         let isProcessing = false;
         let isThinkingModel = false;
+        let sessionPromptDirty = false;
 
         // Load initial status
         async function loadStatus() {
@@ -499,6 +607,20 @@ const htmlTemplate = `<!DOCTYPE html>
                 } else {
                     document.getElementById('focusItem').style.display = 'none';
                 }
+
+                const hasSessionPrompt = !!data.hasSessionPrompt;
+                const sessionPromptIndicator = document.getElementById('sessionPromptIndicator');
+                if (sessionPromptIndicator) {
+                    sessionPromptIndicator.style.display = hasSessionPrompt ? 'flex' : 'none';
+                }
+
+                if (sessionPromptInput && (!sessionPromptDirty || document.activeElement !== sessionPromptInput)) {
+                    sessionPromptInput.value = data.sessionPrompt || '';
+                }
+
+                if (!sessionPromptDirty) {
+                    updateSessionPromptState(hasSessionPrompt ? 'Session prompt is active for this session.' : 'Session prompt is not set.', false);
+                }
             } catch (error) {
                 console.error('Failed to load status:', error);
             }
@@ -515,6 +637,64 @@ const htmlTemplate = `<!DOCTYPE html>
             } catch (error) {
                 console.error('Failed to load messages:', error);
             }
+        }
+
+        function updateSessionPromptState(message, isError) {
+            if (!sessionPromptState) {
+                return;
+            }
+
+            sessionPromptState.textContent = message;
+            sessionPromptState.style.color = isError ? '#ef4444' : 'var(--text-secondary)';
+        }
+
+        async function saveSessionPrompt(prompt) {
+            const response = await fetch('/api/session-prompt', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ prompt: prompt }),
+            });
+
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to save session prompt');
+            }
+
+            return data;
+        }
+
+        async function applySessionPrompt() {
+            if (!sessionPromptInput) {
+                return;
+            }
+
+            const prompt = sessionPromptInput.value.trim();
+            sessionPromptApplyButton.disabled = true;
+            sessionPromptClearButton.disabled = true;
+
+            try {
+                await saveSessionPrompt(prompt);
+                sessionPromptDirty = false;
+                updateSessionPromptState(prompt ? 'Session prompt saved and active.' : 'Session prompt is not set.', false);
+                await loadStatus();
+            } catch (error) {
+                updateSessionPromptState('Failed to save session prompt: ' + error.message, true);
+            } finally {
+                sessionPromptApplyButton.disabled = false;
+                sessionPromptClearButton.disabled = false;
+            }
+        }
+
+        async function clearSessionPrompt() {
+            if (!sessionPromptInput) {
+                return;
+            }
+
+            sessionPromptInput.value = '';
+            sessionPromptDirty = true;
+            await applySessionPrompt();
         }
 
         function splitMarkdownRow(line) {
@@ -928,6 +1108,18 @@ const htmlTemplate = `<!DOCTYPE html>
         // Event listeners
         sendButton.addEventListener('click', sendMessage);
         stopButton.addEventListener('click', stopProcessing);
+        if (sessionPromptInput) {
+            sessionPromptInput.addEventListener('input', () => {
+                sessionPromptDirty = true;
+                updateSessionPromptState('Session prompt changed. Click Apply to activate.', false);
+            });
+        }
+        if (sessionPromptApplyButton) {
+            sessionPromptApplyButton.addEventListener('click', applySessionPrompt);
+        }
+        if (sessionPromptClearButton) {
+            sessionPromptClearButton.addEventListener('click', clearSessionPrompt);
+        }
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 sendMessage();

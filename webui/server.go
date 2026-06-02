@@ -30,6 +30,7 @@ type Server struct {
 	endpoint    string
 	scanResult  *types.ScanResult
 	focusedPath string
+	sessionPrompt string
 	cfg         *config.Config
 	llmClient   *llm.OllamaClient
 	messages    []Message
@@ -54,6 +55,11 @@ type ChatRequest struct {
 	Message string `json:"message"`
 }
 
+// SessionPromptRequest updates the active per-session prompt instructions.
+type SessionPromptRequest struct {
+	Prompt string `json:"prompt"`
+}
+
 // ChatResponse represents a chat response
 type ChatResponse struct {
 	Success  bool      `json:"success"`
@@ -68,6 +74,8 @@ type StatusResponse struct {
 	Model        string `json:"model"`
 	TotalFiles   int    `json:"totalFiles"`
 	FocusedPath  string `json:"focusedPath,omitempty"`
+	SessionPrompt string `json:"sessionPrompt,omitempty"`
+	HasSessionPrompt bool `json:"hasSessionPrompt"`
 	IsThinking   bool   `json:"isThinking"`
 	IsProcessing bool   `json:"isProcessing"`
 }
@@ -112,6 +120,7 @@ func (s *Server) Start(port int) error {
 	http.HandleFunc("/api/messages", s.handleMessages)
 	http.HandleFunc("/api/rescan", s.handleRescan)
 	http.HandleFunc("/api/focus", s.handleFocus)
+	http.HandleFunc("/api/session-prompt", s.handleSessionPrompt)
 	http.HandleFunc("/api/progress", s.handleProgress)
 	http.HandleFunc("/api/stop", s.handleStop)
 
@@ -127,6 +136,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
+	sessionPrompt := strings.TrimSpace(s.sessionPrompt)
 	defer s.mu.RUnlock()
 
 	status := StatusResponse{
@@ -134,6 +144,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Model:        s.model,
 		TotalFiles:   s.scanResult.TotalFiles,
 		FocusedPath:  s.focusedPath,
+		SessionPrompt: sessionPrompt,
+		HasSessionPrompt: sessionPrompt != "",
 		IsThinking:   llm.IsThinkingModel(s.model),
 		IsProcessing: s.isProcessing(),
 	}
@@ -421,6 +433,36 @@ func (s *Server) handleFocus(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleSessionPrompt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req SessionPromptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, "Invalid request")
+		return
+	}
+
+	prompt := strings.TrimSpace(req.Prompt)
+	if len(prompt) > 8000 {
+		sendError(w, "Session prompt is too long (max 8000 characters)")
+		return
+	}
+
+	s.mu.Lock()
+	s.sessionPrompt = prompt
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":          true,
+		"sessionPrompt":    prompt,
+		"hasSessionPrompt": prompt != "",
+	})
+}
+
 func (s *Server) handleCommand(input string) string {
 	lower := strings.ToLower(strings.TrimSpace(input))
 
@@ -440,18 +482,23 @@ func (s *Server) handleCommand(input string) string {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
 		activeFiles := s.getActiveFiles()
+		sessionPromptState := "not set"
+		if strings.TrimSpace(s.sessionPrompt) != "" {
+			sessionPromptState = "set"
+		}
 		return fmt.Sprintf(`📊 Statistics:
 • Directory: %s
 • Total files scanned: %d
 • Active files: %d
 • Focused file: %s
+• Session prompt: %s
 • Model: %s`, s.directory, s.scanResult.TotalFiles, len(activeFiles),
 			func() string {
 				if s.focusedPath != "" {
 					return s.focusedPath
 				}
 				return "none"
-			}(), s.model)
+			}(), sessionPromptState, s.model)
 
 	case lower == "files":
 		s.mu.RLock()
@@ -609,6 +656,7 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 func (s *Server) processQuestion(ctx context.Context, question string, files []*types.FileInfo) (*types.AnalysisResponse, error) {
 	start := time.Now()
 	analyzerEngine := analyzer.NewAnalyzer(s.cfg)
+	effectiveQuestion := s.buildQuestionWithSessionPrompt(question)
 
 	s.progressMu.Lock()
 	progressCh := s.progressCh
@@ -671,7 +719,7 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 		if len(content) < 100 {
 			return fileResult{idx: idx, name: file.RelPath, err: fmt.Errorf("no valid content")}
 		}
-		task := fmt.Sprintf("Analyze the file '%s'. %s", file.RelPath, question)
+		task := fmt.Sprintf("Analyze the file '%s'. %s", file.RelPath, effectiveQuestion)
 		var resp *types.AnalysisResponse
 		var err error
 		if llm.IsThinkingModel(s.cfg.LLM.Model) {
@@ -786,6 +834,18 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 		FileTokens: fileTokens,
 		Duration:   time.Since(start),
 	}, nil
+}
+
+func (s *Server) buildQuestionWithSessionPrompt(question string) string {
+	s.mu.RLock()
+	sessionPrompt := strings.TrimSpace(s.sessionPrompt)
+	s.mu.RUnlock()
+
+	if sessionPrompt == "" {
+		return question
+	}
+
+	return fmt.Sprintf("Session-level instructions (apply to this request):\n%s\n\nUser request:\n%s", sessionPrompt, question)
 }
 
 func (s *Server) saveSession(question string, resp *types.AnalysisResponse) {
