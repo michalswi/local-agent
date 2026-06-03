@@ -1,7 +1,7 @@
 package main
 
 const (
-	version   = "1.3.8"
+	version   = "1.3.9"
 	ansiGreen = "\033[32m"
 	ansiReset = "\033[0m"
 )
