@@ -128,6 +128,8 @@ func DefaultConfig() *Config {
 				"*.scala",
 				"*.log",
 				"*.pdf",
+				"*.doc",
+				"*.docx",
 				"*.pcap",
 				"*.pcapng",
 			},

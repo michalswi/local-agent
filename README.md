@@ -23,6 +23,7 @@
 - 📦 Standalone binary with embedded assets - no external dependencies
 - 📊 PCAP file analysis - parse and analyze network traffic captures (.pcap, .pcapng, .cap)
 - 📄 PDF file analysis - extract and analyze text from PDF files up to 10MB (requires `AGENT_TOKEN_LIMIT >= 8000`)
+- 📄 DOC/DOCX file analysis - extract and analyze text from Word documents (.doc, .docx) up to 10MB (requires `AGENT_TOKEN_LIMIT >= 8000` for large files)
 
 ## 🚀 Quick Start
 
@@ -88,6 +89,8 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 
 **Focus:** `focus <filename>` limits analysis to a single scanned file until you run `focus clear`.
 
+**Session Prompt:** In Web UI, open the collapsible **Session Prompt** panel to add optional instructions applied to every request in the current interactive session. Use **Apply** to enable or **Clear** to disable; it is not persisted after the session ends.
+
 
 ## 🔧 Ollama Setup
 
@@ -123,7 +126,7 @@ ollama serve
 
 ## 📁 File Filtering
 
-Default filters in [config/config.go](config/config.go): supports common source files (`.go`, `.js`, `.py`, etc.), configs (`.yaml`, `.json`), and docs (`.pdf`, `.md`, `.txt`). Excludes `node_modules`, `.git`, `.env*`, build artifacts.
+Default filters in [config/config.go](config/config.go): supports common source files (`.go`, `.js`, `.py`, etc.), configs (`.yaml`, `.json`), and docs (`.pdf`, `.doc`, `.docx`, `.md`, `.txt`). Excludes `node_modules`, `.git`, `.env*`, build artifacts.
 
 See [examples/](examples/) directory for sample configuration files:
 - [config.yaml](examples/config.yaml) - Full configuration example with comments

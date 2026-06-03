@@ -2,6 +2,7 @@ package llm
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -35,7 +36,7 @@ type ChatRequest struct {
 
 // Message represents a chat message
 type Message struct {
-	Role     string `json:"role"`     // "user", "assistant", "system"
+	Role     string `json:"role"` // "user", "assistant", "system"
 	Content  string `json:"content"`
 	Thinking string `json:"thinking,omitempty"` // populated by Ollama when think:true
 }
@@ -75,6 +76,15 @@ func NewOllamaClient(endpoint, model string, timeout int) *OllamaClient {
 
 // Chat sends a chat request to Ollama
 func (c *OllamaClient) Chat(request *ChatRequest) (*ChatResponse, error) {
+	return c.ChatWithContext(context.Background(), request)
+}
+
+// ChatWithContext sends a chat request to Ollama with cancellation support.
+func (c *OllamaClient) ChatWithContext(ctx context.Context, request *ChatRequest) (*ChatResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	// Set model if not specified
 	if request.Model == "" {
 		request.Model = c.model
@@ -91,7 +101,7 @@ func (c *OllamaClient) Chat(request *ChatRequest) (*ChatResponse, error) {
 
 	// Create HTTP request
 	url := fmt.Sprintf("%s/api/chat", c.endpoint)
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -218,6 +228,15 @@ func stripThinkingContent(content, model string) string {
 // model thinks automatically. The reasoning block is stripped from Response and
 // returned separately in ThinkingContent.
 func (c *OllamaClient) AnalyzeThinking(task string, filesContent string, temperature float64) (*types.AnalysisResponse, error) {
+	return c.AnalyzeThinkingWithContext(context.Background(), task, filesContent, temperature)
+}
+
+// AnalyzeThinkingWithContext behaves like AnalyzeThinking with request cancellation support.
+func (c *OllamaClient) AnalyzeThinkingWithContext(ctx context.Context, task string, filesContent string, temperature float64) (*types.AnalysisResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	startTime := time.Now()
 
 	systemContent := systemPrompt
@@ -242,7 +261,7 @@ func (c *OllamaClient) AnalyzeThinking(task string, filesContent string, tempera
 		Think:       true,
 	}
 
-	response, err := c.Chat(request)
+	response, err := c.ChatWithContext(ctx, request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get LLM response: %w", err)
 	}
@@ -298,6 +317,15 @@ func (c *OllamaClient) ListModels() ([]string, error) {
 
 // Analyze sends files for analysis with a specific task
 func (c *OllamaClient) Analyze(task string, filesContent string, temperature float64) (*types.AnalysisResponse, error) {
+	return c.AnalyzeWithContext(context.Background(), task, filesContent, temperature)
+}
+
+// AnalyzeWithContext sends files for analysis with cancellation support.
+func (c *OllamaClient) AnalyzeWithContext(ctx context.Context, task string, filesContent string, temperature float64) (*types.AnalysisResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	startTime := time.Now()
 
 	systemMessage := Message{
@@ -317,7 +345,7 @@ func (c *OllamaClient) Analyze(task string, filesContent string, temperature flo
 	}
 
 	// Send request
-	response, err := c.Chat(request)
+	response, err := c.ChatWithContext(ctx, request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get LLM response: %w", err)
 	}

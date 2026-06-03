@@ -1048,43 +1048,243 @@ func (m InteractiveModel) wrapMessage(text string, width int) string {
 		width = 20
 	}
 
-	// Preserve existing line breaks by processing each line separately
 	inputLines := strings.Split(text, "\n")
 	var outputLines []string
+	inCodeFence := false
 
-	for _, inputLine := range inputLines {
-		// Empty lines should be preserved
-		if strings.TrimSpace(inputLine) == "" {
-			outputLines = append(outputLines, "")
+	for i := 0; i < len(inputLines); i++ {
+		inputLine := inputLines[i]
+		trimmed := strings.TrimSpace(inputLine)
+
+		if strings.HasPrefix(trimmed, "```") {
+			inCodeFence = !inCodeFence
+			outputLines = append(outputLines, inputLine)
 			continue
 		}
 
-		// Wrap this line
-		words := strings.Fields(inputLine)
-		if len(words) == 0 {
-			outputLines = append(outputLines, "")
+		if tableLines, consumed, ok := m.renderMarkdownTable(inputLines, i, width); ok {
+			outputLines = append(outputLines, tableLines...)
+			i += consumed - 1
 			continue
 		}
 
-		var currentLine strings.Builder
-		for _, word := range words {
-			if currentLine.Len() == 0 {
-				currentLine.WriteString(word)
-			} else if currentLine.Len()+1+len(word) <= width {
-				currentLine.WriteString(" " + word)
-			} else {
-				outputLines = append(outputLines, currentLine.String())
-				currentLine.Reset()
-				currentLine.WriteString(word)
-			}
+		if inCodeFence || trimmed == "" {
+			outputLines = append(outputLines, inputLine)
+			continue
 		}
 
-		if currentLine.Len() > 0 {
-			outputLines = append(outputLines, currentLine.String())
-		}
+		outputLines = append(outputLines, wrapLine(inputLine, width)...)
 	}
 
 	return strings.Join(outputLines, "\n")
+}
+
+func (m InteractiveModel) renderMarkdownTable(lines []string, start, width int) ([]string, int, bool) {
+	if start+1 >= len(lines) {
+		return nil, 0, false
+	}
+
+	if !isLikelyTableRow(lines[start]) || !isMarkdownSeparatorRow(lines[start+1]) {
+		return nil, 0, false
+	}
+
+	end := start + 2
+	for end < len(lines) && isLikelyTableRow(lines[end]) {
+		end++
+	}
+
+	bodyRows := lines[start+2 : end]
+	if len(bodyRows) == 0 {
+		return nil, 0, false
+	}
+
+	headers := parseMarkdownTableRow(lines[start])
+	if len(headers) < 2 {
+		return nil, 0, false
+	}
+
+	cols := len(headers)
+	for i := range headers {
+		headers[i] = strings.TrimSpace(headers[i])
+		if headers[i] == "" {
+			headers[i] = fmt.Sprintf("Column %d", i+1)
+		}
+	}
+
+	rows := make([][]string, 0, len(bodyRows))
+	for _, raw := range bodyRows {
+		cells := normalizeCells(parseMarkdownTableRow(raw), cols)
+		rows = append(rows, cells)
+	}
+
+	// Estimate whether a classic aligned table fits the viewport.
+	tableWidth := 1
+	colWidths := make([]int, cols)
+	for i, h := range headers {
+		colWidths[i] = len(h)
+	}
+	for _, row := range rows {
+		for c := 0; c < cols; c++ {
+			if len(row[c]) > colWidths[c] {
+				colWidths[c] = len(row[c])
+			}
+		}
+	}
+	for _, w := range colWidths {
+		tableWidth += w + 3
+	}
+
+	if tableWidth <= width {
+		return renderAlignedTable(headers, rows, colWidths), end - start, true
+	}
+
+	return renderStackedTable(headers, rows, width), end - start, true
+}
+
+func isLikelyTableRow(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	if strings.Count(trimmed, "|") < 1 {
+		return false
+	}
+	return strings.HasPrefix(trimmed, "|") || strings.HasSuffix(trimmed, "|") || strings.Contains(trimmed, " | ")
+}
+
+func isMarkdownSeparatorRow(line string) bool {
+	cells := parseMarkdownTableRow(line)
+	if len(cells) < 2 {
+		return false
+	}
+	for _, cell := range cells {
+		part := strings.TrimSpace(cell)
+		if part == "" || !strings.Contains(part, "-") {
+			return false
+		}
+		for _, ch := range part {
+			if ch != '-' && ch != ':' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func parseMarkdownTableRow(line string) []string {
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "|") {
+		trimmed = trimmed[1:]
+	}
+	if strings.HasSuffix(trimmed, "|") {
+		trimmed = trimmed[:len(trimmed)-1]
+	}
+
+	parts := strings.Split(trimmed, "|")
+	out := make([]string, len(parts))
+	for i, p := range parts {
+		out[i] = strings.TrimSpace(p)
+	}
+	return out
+}
+
+func normalizeCells(cells []string, cols int) []string {
+	if len(cells) >= cols {
+		return cells[:cols]
+	}
+	normalized := make([]string, cols)
+	copy(normalized, cells)
+	return normalized
+}
+
+func renderAlignedTable(headers []string, rows [][]string, widths []int) []string {
+	buildLine := func(cells []string) string {
+		var b strings.Builder
+		b.WriteString("|")
+		for i, cell := range cells {
+			pad := widths[i] - len(cell)
+			if pad < 0 {
+				pad = 0
+			}
+			b.WriteString(" ")
+			b.WriteString(cell)
+			b.WriteString(strings.Repeat(" ", pad))
+			b.WriteString(" |")
+		}
+		return b.String()
+	}
+
+	divider := make([]string, len(widths))
+	for i, w := range widths {
+		divider[i] = strings.Repeat("-", max(3, w))
+	}
+
+	out := []string{buildLine(headers), buildLine(divider)}
+	for _, row := range rows {
+		out = append(out, buildLine(row))
+	}
+	return out
+}
+
+func renderStackedTable(headers []string, rows [][]string, width int) []string {
+	out := make([]string, 0, len(rows)*4)
+	out = append(out, "Table:")
+
+	for i, row := range rows {
+		out = append(out, fmt.Sprintf("- Row %d", i+1))
+		for c, header := range headers {
+			value := strings.TrimSpace(row[c])
+			if value == "" {
+				continue
+			}
+			line := fmt.Sprintf("  %s: %s", header, value)
+			out = append(out, wrapLine(line, width)...)
+		}
+	}
+
+	return out
+}
+
+func wrapLine(line string, width int) []string {
+	if width < 20 {
+		width = 20
+	}
+
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return []string{""}
+	}
+
+	words := strings.Fields(line)
+	if len(words) == 0 {
+		return []string{line}
+	}
+
+	var out []string
+	var current strings.Builder
+
+	for _, word := range words {
+		if current.Len() == 0 {
+			current.WriteString(word)
+			continue
+		}
+
+		if current.Len()+1+len(word) <= width {
+			current.WriteString(" ")
+			current.WriteString(word)
+			continue
+		}
+
+		out = append(out, current.String())
+		current.Reset()
+		current.WriteString(word)
+	}
+
+	if current.Len() > 0 {
+		out = append(out, current.String())
+	}
+
+	return out
 }
 
 func min(a, b int) int {

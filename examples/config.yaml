@@ -80,6 +80,9 @@ filters:
     - "*.md"
     - "*.txt"
     - "*.rst"
+    - "*.pdf"
+    - "*.doc"
+    - "*.docx"
     
     # Scripts
     - "*.sh"

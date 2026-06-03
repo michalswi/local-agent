@@ -39,6 +39,8 @@ const (
 	TypeArchive   FileType = "archive"
 	TypeImage     FileType = "image"
 	TypePDF       FileType = "pdf"
+	TypeDOC       FileType = "doc"
+	TypeDOCX      FileType = "docx"
 	TypePCAP      FileType = "pcap"
 	TypeUnknown   FileType = "unknown"
 	TypeSensitive FileType = "sensitive"
