@@ -318,6 +318,92 @@ const htmlTemplate = `<!DOCTYPE html>
         #stopButton:hover:not(:disabled) { background: #d93025; transform: scale(1.03); }
         #stopButton:disabled { background: var(--bg-tertiary); cursor: not-allowed; opacity: 0.45; }
 
+        #dirButton {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 22px;
+            padding: 0.6rem 1.1rem;
+            font-size: 0.92rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.18s, transform 0.12s;
+            white-space: nowrap;
+        }
+
+        #dirButton:hover:not(:disabled) { background: var(--border-color); transform: scale(1.03); }
+        #dirButton:disabled { cursor: not-allowed; opacity: 0.45; }
+
+        /* ── Change-dir modal ────────────────────────────────── */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.55);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.open { display: flex; }
+
+        .modal-box {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.5rem;
+            width: min(520px, 92vw);
+            box-shadow: 0 8px 32px var(--shadow-color);
+        }
+
+        .modal-title {
+            font-size: 1rem;
+            font-weight: 700;
+            margin-bottom: 0.9rem;
+            color: var(--text-primary);
+        }
+
+        #dirInput {
+            width: 100%;
+            background: var(--bg-input);
+            border: 1.5px solid var(--border-color);
+            border-radius: 10px;
+            padding: 0.6rem 0.9rem;
+            color: var(--text-primary);
+            font-size: 0.93rem;
+            font-family: 'Menlo', 'SF Mono', 'Courier New', monospace;
+            margin-bottom: 0.9rem;
+            transition: border-color 0.18s;
+        }
+
+        #dirInput:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px rgba(10,132,255,0.18);
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.5rem;
+        }
+
+        .modal-btn {
+            border: none;
+            border-radius: 8px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 0.45rem 1rem;
+            transition: background 0.15s;
+        }
+
+        .modal-btn.confirm { background: var(--accent-color); color: #fff; }
+        .modal-btn.confirm:hover:not(:disabled) { background: var(--accent-hover); }
+        .modal-btn.cancel { background: transparent; color: var(--text-primary); border: 1px solid var(--border-color); }
+        .modal-btn.cancel:hover:not(:disabled) { background: var(--bg-tertiary); }
+        .modal-btn:disabled { cursor: not-allowed; opacity: 0.55; }
+
         /* ── Typing indicator ────────────────────────────────── */
         .loading {
             display: flex;
@@ -577,9 +663,21 @@ const htmlTemplate = `<!DOCTYPE html>
             />
             <button id="sendButton">Send</button>
             <button id="stopButton" disabled>Stop</button>
+            <button id="dirButton" title="Change working directory">Dir</button>
         </div>
         <div class="commands-hint">
             type <code>help</code> for commands
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="dirModal">
+        <div class="modal-box">
+            <div class="modal-title">📂 Change working directory</div>
+            <input type="text" id="dirInput" placeholder="/path/to/project" autocomplete="off" spellcheck="false">
+            <div class="modal-actions">
+                <button class="modal-btn cancel" id="dirModalCancel">Cancel</button>
+                <button class="modal-btn confirm" id="dirModalConfirm">Change</button>
+            </div>
         </div>
     </div>
 
@@ -588,6 +686,11 @@ const htmlTemplate = `<!DOCTYPE html>
         const messageInput = document.getElementById('messageInput');
         const sendButton = document.getElementById('sendButton');
         const stopButton = document.getElementById('stopButton');
+        const dirButton = document.getElementById('dirButton');
+        const dirModal = document.getElementById('dirModal');
+        const dirInput = document.getElementById('dirInput');
+        const dirModalCancel = document.getElementById('dirModalCancel');
+        const dirModalConfirm = document.getElementById('dirModalConfirm');
         const sessionPromptPanel = document.getElementById('sessionPromptPanel');
         const sessionPromptInput = document.getElementById('sessionPromptInput');
         const sessionPromptApplyButton = document.getElementById('sessionPromptApply');
@@ -1120,6 +1223,60 @@ const htmlTemplate = `<!DOCTYPE html>
             const isLight = body.classList.contains('light-theme');
             themeToggle.textContent = isLight ? '☀️' : '🌙';
             localStorage.setItem('theme', isLight ? 'light' : 'dark');
+        });
+
+        // Dir button / change directory
+        function openDirModal() {
+            dirInput.value = document.getElementById('directory').textContent.trim() || '';
+            dirModal.classList.add('open');
+            setTimeout(() => { dirInput.focus(); dirInput.select(); }, 50);
+        }
+
+        function closeDirModal() {
+            dirModal.classList.remove('open');
+        }
+
+        async function changeDir() {
+            const path = dirInput.value.trim();
+            if (!path) return;
+
+            dirModalConfirm.disabled = true;
+            dirModalCancel.disabled = true;
+
+            try {
+                const response = await fetch('/api/changedir', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path }),
+                });
+                const data = await response.json();
+                closeDirModal();
+
+                if (data.success && data.message) {
+                    addMessage(data.message.role, data.message.content, data.message.timestamp);
+                    scrollToBottom();
+                    await loadStatus();
+                } else {
+                    addMessage('assistant', '\u274c ' + (data.error || 'Failed to change directory'), new Date().toISOString());
+                    scrollToBottom();
+                }
+            } catch (error) {
+                closeDirModal();
+                addMessage('assistant', '\u274c Network error: ' + error.message, new Date().toISOString());
+                scrollToBottom();
+            } finally {
+                dirModalConfirm.disabled = false;
+                dirModalCancel.disabled = false;
+            }
+        }
+
+        dirButton.addEventListener('click', openDirModal);
+        dirModalCancel.addEventListener('click', closeDirModal);
+        dirModalConfirm.addEventListener('click', changeDir);
+        dirModal.addEventListener('click', (e) => { if (e.target === dirModal) closeDirModal(); });
+        dirInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') changeDir();
+            if (e.key === 'Escape') closeDirModal();
         });
 
         // Event listeners

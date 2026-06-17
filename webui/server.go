@@ -25,22 +25,22 @@ import (
 
 // Server represents the web UI server
 type Server struct {
-	directory   string
-	model       string
-	endpoint    string
-	scanResult  *types.ScanResult
-	focusedPath string
+	directory     string
+	model         string
+	endpoint      string
+	scanResult    *types.ScanResult
+	focusedPath   string
 	sessionPrompt string
-	cfg         *config.Config
-	llmClient   *llm.OllamaClient
-	messages    []Message
-	mu          sync.RWMutex
-	progressCh  chan string
-	progressMu  sync.Mutex
-	runMu       sync.Mutex
-	runCancel   context.CancelFunc
-	runActiveID uint64
-	nextRunID   uint64
+	cfg           *config.Config
+	llmClient     *llm.OllamaClient
+	messages      []Message
+	mu            sync.RWMutex
+	progressCh    chan string
+	progressMu    sync.Mutex
+	runMu         sync.Mutex
+	runCancel     context.CancelFunc
+	runActiveID   uint64
+	nextRunID     uint64
 }
 
 // Message represents a chat message
@@ -70,14 +70,14 @@ type ChatResponse struct {
 
 // StatusResponse represents the current status
 type StatusResponse struct {
-	Directory    string `json:"directory"`
-	Model        string `json:"model"`
-	TotalFiles   int    `json:"totalFiles"`
-	FocusedPath  string `json:"focusedPath,omitempty"`
-	SessionPrompt string `json:"sessionPrompt,omitempty"`
-	HasSessionPrompt bool `json:"hasSessionPrompt"`
-	IsThinking   bool   `json:"isThinking"`
-	IsProcessing bool   `json:"isProcessing"`
+	Directory        string `json:"directory"`
+	Model            string `json:"model"`
+	TotalFiles       int    `json:"totalFiles"`
+	FocusedPath      string `json:"focusedPath,omitempty"`
+	SessionPrompt    string `json:"sessionPrompt,omitempty"`
+	HasSessionPrompt bool   `json:"hasSessionPrompt"`
+	IsThinking       bool   `json:"isThinking"`
+	IsProcessing     bool   `json:"isProcessing"`
 }
 
 // NewServer creates a new web UI server
@@ -123,6 +123,7 @@ func (s *Server) Start(port int) error {
 	http.HandleFunc("/api/session-prompt", s.handleSessionPrompt)
 	http.HandleFunc("/api/progress", s.handleProgress)
 	http.HandleFunc("/api/stop", s.handleStop)
+	http.HandleFunc("/api/changedir", s.handleChangeDir)
 
 	addr := fmt.Sprintf(":%d", port)
 	log.Printf("🌐 Web UI available at http://localhost%s\n", addr)
@@ -140,14 +141,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	status := StatusResponse{
-		Directory:    s.directory,
-		Model:        s.model,
-		TotalFiles:   s.scanResult.TotalFiles,
-		FocusedPath:  s.focusedPath,
-		SessionPrompt: sessionPrompt,
+		Directory:        s.directory,
+		Model:            s.model,
+		TotalFiles:       s.scanResult.TotalFiles,
+		FocusedPath:      s.focusedPath,
+		SessionPrompt:    sessionPrompt,
 		HasSessionPrompt: sessionPrompt != "",
-		IsThinking:   llm.IsThinkingModel(s.model),
-		IsProcessing: s.isProcessing(),
+		IsThinking:       llm.IsThinkingModel(s.model),
+		IsProcessing:     s.isProcessing(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -354,6 +355,64 @@ func (s *Server) isProcessing() bool {
 	s.runMu.Lock()
 	defer s.runMu.Unlock()
 	return s.runCancel != nil
+}
+
+func (s *Server) handleChangeDir(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, "Invalid request")
+		return
+	}
+
+	newDir := filepath.Clean(strings.TrimSpace(req.Path))
+	if newDir == "" || newDir == "." {
+		sendError(w, "Path is required")
+		return
+	}
+
+	info, err := os.Stat(newDir)
+	if err != nil {
+		sendError(w, fmt.Sprintf("Cannot access directory: %v", err))
+		return
+	}
+	if !info.IsDir() {
+		sendError(w, "Path is not a directory")
+		return
+	}
+
+	s.mu.Lock()
+	s.directory = newDir
+	s.focusedPath = ""
+	s.mu.Unlock()
+
+	scanResult, err := s.performRescan()
+	if err != nil {
+		sendError(w, fmt.Sprintf("Scan failed: %v", err))
+		return
+	}
+
+	s.mu.Lock()
+	s.scanResult = scanResult
+	msg := Message{
+		Role:      "assistant",
+		Content:   fmt.Sprintf("📂 Directory changed to: %s\n\nFiles found: %d\nFiltered: %d", newDir, scanResult.TotalFiles, scanResult.FilteredFiles),
+		Timestamp: time.Now(),
+	}
+	s.messages = append(s.messages, msg)
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(ChatResponse{
+		Success: true,
+		Message: &msg,
+	})
 }
 
 func (s *Server) handleRescan(w http.ResponseWriter, r *http.Request) {
