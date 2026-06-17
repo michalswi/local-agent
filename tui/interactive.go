@@ -18,6 +18,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // InteractiveModel represents the interactive conversation mode
@@ -250,55 +251,52 @@ func (m InteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m InteractiveModel) View() string {
 	if m.quitting {
-		return goodbyeStyle.Render("👋 Goodbye!")
+		return goodbyeStyle.Render("  Goodbye  ")
 	}
 
 	var s strings.Builder
 
-	// Header
-	headerText := fmt.Sprintf("🤖 Interactive Mode | %s | Files: %d", m.model, m.scanResult.TotalFiles)
+	// ── Header bar ──────────────────────────────────────────────
+	headerParts := []string{infoStyle.Render(m.model)}
+	headerParts = append(headerParts, subtleStyle.Render(fmt.Sprintf("%d files", m.scanResult.TotalFiles)))
 	if m.focusedPath != "" {
-		headerText += fmt.Sprintf(" | Focus: %s", m.focusedPath)
+		headerParts = append(headerParts, metadataStyle.Render("focus: "+m.focusedPath))
 	}
 	if llm.IsThinkingModel(m.model) {
-		headerText += " | 🧠 Thinking"
+		headerParts = append(headerParts, thinkingStyle.Render("thinking"))
 	}
-	header := headerStyle.Render(headerText)
+	header := headerStyle.Render(strings.Join(headerParts, "  ·  "))
 	s.WriteString(header + "\n\n")
 
-	// Messages area
-	messagesHeight := m.height - 8 // Leave room for header, input, and footer
+	// ── Messages ─────────────────────────────────────────────────
+	messagesHeight := m.height - 9
 	if messagesHeight < 5 {
 		messagesHeight = 5
 	}
+	s.WriteString(m.renderMessages(messagesHeight))
 
-	messages := m.renderMessages(messagesHeight)
-	s.WriteString(messages)
+	// ── Divider ──────────────────────────────────────────────────
+	s.WriteString("\n" + subtleStyle.Render(strings.Repeat("─", m.width)) + "\n")
 
-	s.WriteString("\n" + strings.Repeat("─", m.width) + "\n")
-
-	// Input area
+	// ── Input / Processing area ───────────────────────────────────
 	if m.processing {
+		indicator := processingStyle.Render("⏳  Processing…")
 		if llm.IsThinkingModel(m.model) {
-			s.WriteString(thinkingStyle.Render("🧠 Reasoning...") + "\n")
-		} else {
-			s.WriteString(processingStyle.Render("⏳ Processing...") + "\n")
+			indicator = thinkingStyle.Render("🧠  Reasoning…")
 		}
-		// Show progress messages
+		s.WriteString(indicator + "\n")
 		if len(m.processingProgress) > 0 {
-			s.WriteString("\n" + subtleStyle.Render("Progress:") + "\n")
-			for _, msg := range m.processingProgress {
-				s.WriteString(subtleStyle.Render("  "+msg) + "\n")
+			for _, prog := range m.processingProgress {
+				s.WriteString(subtleStyle.Render("   "+prog) + "\n")
 			}
-			s.WriteString("\n") // Add space after progress messages
 		}
 	} else {
-		s.WriteString(inputLabelStyle.Render("You: ") + m.input.View() + "\n")
+		prompt := inputLabelStyle.Render("❯")
+		s.WriteString(prompt + "  " + m.input.View() + "\n")
 	}
 
-	// Footer
-	footer := footerStyle.Render("↑/↓ scroll • enter send • ctrl+c quit")
-	s.WriteString(footer)
+	// ── Footer hint ───────────────────────────────────────────────
+	s.WriteString(footerStyle.Render("  ↑↓ scroll   return send   ^C quit"))
 
 	return s.String()
 }
@@ -306,84 +304,98 @@ func (m InteractiveModel) View() string {
 func (m InteractiveModel) renderMessages(maxHeight int) string {
 	var lines []string
 
+	bubbleWidth := int(float64(m.width) * 0.70)
+	if bubbleWidth < 44 {
+		bubbleWidth = 44
+	}
+	if bubbleWidth > 110 {
+		bubbleWidth = 110
+	}
+	contentWidth := bubbleWidth - 4 // border (1) + padding (1) on each side
+
 	for i, msg := range m.messages {
-		timestamp := msg.Timestamp.Format("15:04:05")
+		timestamp := metadataStyle.Render(msg.Timestamp.Format("15:04"))
 
 		if msg.Role == "user" {
-			// User message
-			header := userHeaderStyle.Render(fmt.Sprintf("[%s] You:", timestamp))
-			lines = append(lines, header)
+			// Timestamp — right-aligned above bubble
+			tsLine := lipgloss.NewStyle().Width(m.width).Align(lipgloss.Right).Render(timestamp)
+			lines = append(lines, tsLine)
 
-			// Wrap and indent user message
-			wrapped := m.wrapMessage(msg.Content, m.width-6)
-			for _, line := range strings.Split(wrapped, "\n") {
-				lines = append(lines, userMessageStyle.Render("  "+line))
+			// Content wrapped to bubble interior width
+			wrapped := m.wrapMessage(msg.Content, contentWidth)
+
+			// Right-aligned user bubble with blue border
+			bubble := userBubbleStyle.Width(bubbleWidth).Render(wrapped)
+			bubbleBlock := lipgloss.NewStyle().Width(m.width).Align(lipgloss.Right).Render(bubble)
+			for _, line := range strings.Split(bubbleBlock, "\n") {
+				lines = append(lines, line)
 			}
 		} else {
-			// Assistant message
-			header := assistantHeaderStyle.Render(fmt.Sprintf("[%s] Assistant:", timestamp))
-			lines = append(lines, header)
+			// Timestamp — left-aligned above bubble
+			lines = append(lines, "  "+timestamp)
 
-			// Parse metadata from response if present
+			// Strip trailing metadata section (---) from response
 			content := msg.Content
 			metadata := ""
-
 			if idx := strings.LastIndex(content, "\n\n---\n"); idx != -1 {
 				metadata = strings.TrimSpace(content[idx+5:])
 				content = strings.TrimSpace(content[:idx])
 			}
 
-			// Wrap and render assistant message, detecting reasoning blocks
-			wrapped := m.wrapMessage(content, m.width-6)
+			// Build bubble content, colouring reasoning blocks
+			var bubbleContent strings.Builder
+			wrapped := m.wrapMessage(content, contentWidth)
 			inReasoning := false
 			for _, line := range strings.Split(wrapped, "\n") {
 				trimmed := strings.TrimSpace(line)
 				if trimmed == "[reasoning]" {
 					inReasoning = true
-					lines = append(lines, reasoningHeaderStyle.Render("  ── 🧠 Reasoning "+strings.Repeat("─", max(0, m.width-22))))
+					bubbleContent.WriteString(reasoningHeaderStyle.Render("── 🧠 Reasoning "+strings.Repeat("─", max(0, contentWidth-17))) + "\n")
 					continue
 				}
 				if trimmed == "[/reasoning]" {
 					inReasoning = false
-					lines = append(lines, reasoningHeaderStyle.Render("  "+strings.Repeat("─", max(0, m.width-4))))
+					bubbleContent.WriteString(reasoningHeaderStyle.Render(strings.Repeat("─", contentWidth)) + "\n")
 					continue
 				}
 				if inReasoning {
-					lines = append(lines, reasoningLineStyle.Render("  "+line))
+					bubbleContent.WriteString(reasoningLineStyle.Render(line) + "\n")
+				} else if isFileHeaderLine(line) {
+					bubbleContent.WriteString(fileHeaderStyle.Render(line) + "\n")
 				} else {
-					renderStyle := assistantMessageStyle
-					if isFileHeaderLine(line) {
-						renderStyle = fileHeaderStyle
-					}
-					lines = append(lines, renderStyle.Render("  "+line))
+					bubbleContent.WriteString(assistantMessageStyle.Render(line) + "\n")
 				}
 			}
 
-			// Add metadata at the end if present
+			// Assistant bubble with dim rounded border
+			bubble := assistantBubbleStyle.Width(bubbleWidth).Render(strings.TrimRight(bubbleContent.String(), "\n"))
+			for _, line := range strings.Split(bubble, "\n") {
+				lines = append(lines, "  "+line)
+			}
+
+			// Metadata (token/timing) below bubble
 			if metadata != "" {
 				lines = append(lines, "")
-				// Don't wrap metadata lines, keep them as-is
-				for _, line := range strings.Split(metadata, "\n") {
-					lines = append(lines, metadataStyle.Render("  "+line))
+				for _, mline := range strings.Split(metadata, "\n") {
+					lines = append(lines, "  "+metadataStyle.Render(mline))
 				}
 			}
 		}
 
-		// Add spacing between messages (except after last message)
+		// Thin dot separator between messages (not after the last)
 		if i < len(m.messages)-1 {
 			lines = append(lines, "")
-			lines = append(lines, subtleStyle.Render(strings.Repeat("─", min(m.width, 80))))
+			lines = append(lines, "  "+subtleStyle.Render(strings.Repeat("·", min(contentWidth, 60))))
 			lines = append(lines, "")
 		}
 	}
 
-	// Handle scrolling
+	// Handle scrolling — show most-recent lines
 	totalLines := len(lines)
 	if totalLines <= maxHeight {
 		return strings.Join(lines, "\n")
 	}
 
-	// Show most recent messages (from bottom)
 	start := totalLines - maxHeight - m.scrollPos
 	if start < 0 {
 		start = 0
