@@ -8,108 +8,123 @@ const htmlTemplate = `<!DOCTYPE html>
     <title>Local Agent</title>
     <link rel="icon" type="image/png" href="/static/favicon.png" sizes="150x150">
     <style>
+        /* ── Apple dark mode palette ──────────────────────────── */
         :root {
-            --bg-primary: #1a1a1a;
-            --bg-secondary: #2d2d2d;
-            --bg-tertiary: #252525;
-            --bg-input: #1a1a1a;
-            --border-color: #3d3d3d;
-            --text-primary: #e0e0e0;
-            --text-secondary: #888;
-            --text-label: #aaa;
-            --accent-color: #4a9eff;
-            --accent-hover: #3a8eef;
-            --message-user-bg: #4a9eff;
-            --message-assistant-bg: #2d2d2d;
-            --scrollbar-track: #1a1a1a;
-            --scrollbar-thumb: #3d3d3d;
-            --scrollbar-thumb-hover: #4d4d4d;
-            --shadow-color: rgba(0,0,0,0.3);
+            --bg-primary:   #000000;
+            --bg-secondary: #1c1c1e;
+            --bg-tertiary:  #2c2c2e;
+            --bg-input:     #1c1c1e;
+            --bg-glass:     rgba(28,28,30,0.82);
+            --border-color: rgba(255,255,255,0.08);
+            --text-primary:   #f2f2f7;
+            --text-secondary: #8e8e93;
+            --text-label:     #636366;
+            --accent-color:  #0a84ff;
+            --accent-hover:  #0070e0;
+            --bubble-user:   #0a84ff;
+            --bubble-assist: #2c2c2e;
+            --scrollbar-track: transparent;
+            --scrollbar-thumb: #3a3a3c;
+            --scrollbar-thumb-hover: #48484a;
+            --shadow-color: rgba(0,0,0,0.5);
+            --reasoning-color: #bf5af2;
         }
 
+        /* ── Apple light mode palette ─────────────────────────── */
         body.light-theme {
-            --bg-primary: #f5f5f5;
+            --bg-primary:   #f2f2f7;
             --bg-secondary: #ffffff;
-            --bg-tertiary: #e8e8e8;
-            --bg-input: #ffffff;
-            --border-color: #d0d0d0;
-            --text-primary: #1a1a1a;
-            --text-secondary: #666;
-            --text-label: #555;
-            --accent-color: #2563eb;
-            --accent-hover: #1d4ed8;
-            --message-user-bg: #2563eb;
-            --message-assistant-bg: #f0f0f0;
-            --scrollbar-track: #e8e8e8;
-            --scrollbar-thumb: #c0c0c0;
-            --scrollbar-thumb-hover: #a0a0a0;
-            --shadow-color: rgba(0,0,0,0.1);
+            --bg-tertiary:  #e5e5ea;
+            --bg-input:     #ffffff;
+            --bg-glass:     rgba(255,255,255,0.82);
+            --border-color: rgba(0,0,0,0.08);
+            --text-primary:   #1c1c1e;
+            --text-secondary: #6c6c70;
+            --text-label:     #8e8e93;
+            --accent-color:  #007aff;
+            --accent-hover:  #005ecb;
+            --bubble-user:   #007aff;
+            --bubble-assist: #e5e5ea;
+            --scrollbar-track: transparent;
+            --scrollbar-thumb: #c7c7cc;
+            --scrollbar-thumb-hover: #aeaeb2;
+            --shadow-color: rgba(0,0,0,0.12);
+            --reasoning-color: #8944ab;
         }
 
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
             background: var(--bg-primary);
             color: var(--text-primary);
             height: 100vh;
             display: flex;
             flex-direction: column;
-            transition: background 0.3s, color 0.3s;
+            transition: background 0.25s, color 0.25s;
+            -webkit-font-smoothing: antialiased;
         }
 
+        /* ── Header (frosted glass bar) ───────────────────────── */
         .header {
-            background: var(--bg-secondary);
-            padding: 1rem 2rem;
-            border-bottom: 2px solid var(--border-color);
-            box-shadow: 0 2px 10px var(--shadow-color);
+            background: var(--bg-glass);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            padding: 0.85rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 10;
         }
 
         .header-content {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
             flex: 1;
+            min-width: 0;
         }
 
-        .header h1 {
-            font-size: 1.5rem;
-            color: var(--accent-color);
-            margin-bottom: 0.5rem;
+        .header-logo {
+            width: 2.2rem;
+            height: 2.2rem;
+            flex-shrink: 0;
+            border-radius: 0.55rem;
         }
 
-        .theme-toggle {
-            background: var(--bg-tertiary);
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
-            padding: 0.5rem 1rem;
-            cursor: pointer;
-            font-size: 1.2rem;
-            transition: all 0.2s;
+        .header-title {
+            font-size: 1rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
             color: var(--text-primary);
-            margin-left: 1rem;
+            white-space: nowrap;
         }
 
-        .theme-toggle:hover {
+        .header-divider {
+            width: 1px;
+            height: 1.1rem;
             background: var(--border-color);
-            transform: scale(1.05);
+            flex-shrink: 0;
         }
 
         .status-bar {
             display: flex;
-            gap: 2rem;
-            font-size: 0.9rem;
+            gap: 1.2rem;
+            font-size: 0.8rem;
             color: var(--text-secondary);
+            flex-wrap: wrap;
+            min-width: 0;
+            overflow: hidden;
         }
 
         .status-item {
             display: flex;
             align-items: center;
-            gap: 0.5rem;
+            gap: 0.3rem;
+            white-space: nowrap;
         }
 
         .status-label {
@@ -117,19 +132,37 @@ const htmlTemplate = `<!DOCTYPE html>
             color: var(--text-label);
         }
 
+        /* ── Theme toggle pill ───────────────────────────────── */
+        .theme-toggle {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 0.3rem 0.7rem;
+            cursor: pointer;
+            font-size: 1rem;
+            line-height: 1;
+            transition: background 0.2s, transform 0.15s;
+            color: var(--text-primary);
+            flex-shrink: 0;
+        }
+
+        .theme-toggle:hover { background: var(--border-color); transform: scale(1.06); }
+
+        /* ── Chat area ───────────────────────────────────────── */
         .chat-container {
             flex: 1;
             overflow-y: auto;
-            padding: 2rem;
+            padding: 1.5rem 1.25rem;
             display: flex;
             flex-direction: column;
-            gap: 1rem;
+            gap: 0.25rem;
         }
 
+        /* ── iMessage-style bubbles ──────────────────────────── */
         .message {
-            max-width: 80%;
-            padding: 1rem 1.5rem;
-            border-radius: 12px;
+            max-width: 72%;
+            padding: 0.65rem 1rem;
+            border-radius: 18px;
             line-height: 1.6;
             white-space: pre-wrap;
             word-wrap: break-word;
@@ -138,29 +171,30 @@ const htmlTemplate = `<!DOCTYPE html>
         .message-content {
             display: flex;
             flex-direction: column;
-            gap: 0.65rem;
+            gap: 0.55rem;
             white-space: normal;
         }
 
         .message-text {
             white-space: pre-wrap;
             word-break: break-word;
+            line-height: 1.55;
+            font-size: 0.95rem;
         }
 
         .md-table-wrap {
             overflow-x: auto;
             border: 1px solid var(--border-color);
-            border-radius: 8px;
+            border-radius: 10px;
             background: var(--bg-primary);
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
         }
 
         .md-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.9rem;
+            font-size: 0.875rem;
             white-space: normal;
-            min-width: 560px;
+            min-width: 520px;
         }
 
         .md-table th,
@@ -169,290 +203,267 @@ const htmlTemplate = `<!DOCTYPE html>
             border-right: 1px solid var(--border-color);
             text-align: left;
             vertical-align: top;
-            padding: 0.5rem 0.65rem;
+            padding: 0.5rem 0.7rem;
             line-height: 1.45;
             word-break: break-word;
             white-space: normal;
         }
 
         .md-table th:last-child,
-        .md-table td:last-child {
-            border-right: none;
-        }
+        .md-table td:last-child { border-right: none; }
 
         .md-table thead th {
             background: var(--bg-tertiary);
             color: var(--text-primary);
-            font-weight: 700;
+            font-weight: 600;
         }
 
-        .md-table tbody tr:last-child td {
-            border-bottom: none;
-        }
+        .md-table tbody tr:last-child td { border-bottom: none; }
 
+        /* ── Bubble shapes (iMessage style) ─────────────────── */
         .message.user {
             align-self: flex-end;
-            background: var(--message-user-bg);
-            color: white;
+            background: var(--bubble-user);
+            color: #ffffff;
             margin-left: auto;
+            border-bottom-right-radius: 4px;
         }
 
         .message.assistant {
             align-self: flex-start;
-            background: var(--message-assistant-bg);
+            background: var(--bubble-assist);
             border: 1px solid var(--border-color);
+            border-bottom-left-radius: 4px;
         }
 
+        /* timestamp sits below bubble, outside it */
         .message-timestamp {
-            font-size: 0.75rem;
-            opacity: 0.6;
-            margin-top: 0.5rem;
+            font-size: 0.72rem;
+            color: var(--text-label);
+            margin-top: 0.3rem;
+            padding: 0 0.25rem;
         }
 
+        .message.user + .message-timestamp  { text-align: right; }
+
+        /* ── Bottom input area ───────────────────────────────── */
         .input-container {
-            background: var(--bg-secondary);
-            padding: 1.5rem 2rem;
-            border-top: 2px solid var(--border-color);
-            box-shadow: 0 -2px 10px var(--shadow-color);
+            background: var(--bg-glass);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            padding: 0.9rem 1.25rem 1rem;
+            border-top: 1px solid var(--border-color);
         }
 
         .input-wrapper {
             display: flex;
-            gap: 1rem;
-            max-width: 1200px;
+            gap: 0.6rem;
+            max-width: 900px;
             margin: 0 auto;
+            align-items: center;
         }
 
         #messageInput {
             flex: 1;
             background: var(--bg-input);
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
-            padding: 0.75rem 1rem;
+            border: 1.5px solid var(--border-color);
+            border-radius: 22px;
+            padding: 0.6rem 1.1rem;
             color: var(--text-primary);
-            font-size: 1rem;
+            font-size: 0.95rem;
             font-family: inherit;
-            transition: border-color 0.2s;
+            transition: border-color 0.18s, box-shadow 0.18s;
+            line-height: 1.4;
         }
 
         #messageInput:focus {
             outline: none;
             border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px rgba(10,132,255,0.18);
         }
 
         #sendButton {
             background: var(--accent-color);
             color: white;
             border: none;
-            border-radius: 8px;
-            padding: 0.75rem 2rem;
-            font-size: 1rem;
+            border-radius: 22px;
+            padding: 0.6rem 1.4rem;
+            font-size: 0.92rem;
             font-weight: 600;
             cursor: pointer;
-            transition: background 0.2s;
+            transition: background 0.18s, transform 0.12s;
+            white-space: nowrap;
         }
 
         #sendButton:hover:not(:disabled) {
             background: var(--accent-hover);
+            transform: scale(1.03);
         }
 
-        #sendButton:disabled {
-            background: #555;
-            cursor: not-allowed;
-            opacity: 0.5;
-        }
+        #sendButton:disabled { background: var(--bg-tertiary); cursor: not-allowed; opacity: 0.45; }
 
         #stopButton {
-            background: #c2410c;
+            background: #ff453a;
             color: white;
             border: none;
-            border-radius: 8px;
-            padding: 0.75rem 1.2rem;
-            font-size: 1rem;
+            border-radius: 22px;
+            padding: 0.6rem 1.1rem;
+            font-size: 0.92rem;
             font-weight: 600;
             cursor: pointer;
-            transition: background 0.2s;
+            transition: background 0.18s, transform 0.12s;
+            white-space: nowrap;
         }
 
-        #stopButton:hover:not(:disabled) {
-            background: #9a3412;
+        #stopButton:hover:not(:disabled) { background: #d93025; transform: scale(1.03); }
+        #stopButton:disabled { background: var(--bg-tertiary); cursor: not-allowed; opacity: 0.45; }
+
+        #dirButton {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 22px;
+            padding: 0.6rem 1.1rem;
+            font-size: 0.92rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.18s, transform 0.12s;
+            white-space: nowrap;
         }
 
-        #stopButton:disabled {
-            background: #555;
-            cursor: not-allowed;
-            opacity: 0.5;
+        #dirButton:hover:not(:disabled) { background: var(--border-color); transform: scale(1.03); }
+        #dirButton:disabled { cursor: not-allowed; opacity: 0.45; }
+
+        /* ── Change-dir modal ────────────────────────────────── */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.55);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
         }
 
+        .modal-overlay.open { display: flex; }
+
+        .modal-box {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.5rem;
+            width: min(520px, 92vw);
+            box-shadow: 0 8px 32px var(--shadow-color);
+        }
+
+        .modal-title {
+            font-size: 1rem;
+            font-weight: 700;
+            margin-bottom: 0.9rem;
+            color: var(--text-primary);
+        }
+
+        #dirInput {
+            width: 100%;
+            background: var(--bg-input);
+            border: 1.5px solid var(--border-color);
+            border-radius: 10px;
+            padding: 0.6rem 0.9rem;
+            color: var(--text-primary);
+            font-size: 0.93rem;
+            font-family: 'Menlo', 'SF Mono', 'Courier New', monospace;
+            margin-bottom: 0.9rem;
+            transition: border-color 0.18s;
+        }
+
+        #dirInput:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px rgba(10,132,255,0.18);
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.5rem;
+        }
+
+        .modal-btn {
+            border: none;
+            border-radius: 8px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 0.45rem 1rem;
+            transition: background 0.15s;
+        }
+
+        .modal-btn.confirm { background: var(--accent-color); color: #fff; }
+        .modal-btn.confirm:hover:not(:disabled) { background: var(--accent-hover); }
+        .modal-btn.cancel { background: transparent; color: var(--text-primary); border: 1px solid var(--border-color); }
+        .modal-btn.cancel:hover:not(:disabled) { background: var(--bg-tertiary); }
+        .modal-btn:disabled { cursor: not-allowed; opacity: 0.55; }
+
+        /* ── Typing indicator ────────────────────────────────── */
         .loading {
             display: flex;
             gap: 0.5rem;
-            align-items: center;
+            align-items: flex-start;
             color: var(--text-secondary);
-            padding: 1rem;
+            padding: 0.5rem 0.25rem;
         }
 
         .spinner {
-            width: 20px;
-            height: 20px;
-            border: 3px solid var(--border-color);
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+            border: 2px solid var(--border-color);
             border-top-color: var(--accent-color);
             border-radius: 50%;
-            animation: spin 1s linear infinite;
+            animation: spin 0.85s linear infinite;
+            margin-top: 2px;
         }
 
-        .spinner.thinking {
-            border-top-color: #7D56F4;
+        .spinner.thinking { border-top-color: var(--reasoning-color); }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes msgIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to   { opacity: 1; transform: translateY(0); }
         }
 
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
+        /* ── Hint bar below input ────────────────────────────── */
         .commands-hint {
-            padding: 0.5rem 1rem;
-            background: var(--bg-tertiary);
-            border-radius: 6px;
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-            margin-top: 0.5rem;
+            max-width: 900px;
+            margin: 0.45rem auto 0;
+            font-size: 0.78rem;
+            color: var(--text-label);
         }
 
-        .session-prompt-panel {
-            max-width: 1200px;
-            margin: 0 auto 0.85rem;
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
+        .commands-hint code {
             background: var(--bg-tertiary);
+            padding: 0.1rem 0.35rem;
+            border-radius: 4px;
+            color: var(--accent-color);
+            font-size: 0.75rem;
+        }
+
+        /* ── Session prompt accordion ────────────────────────── */
+        .session-prompt-panel {
+            max-width: 900px;
+            margin: 0 auto 0.6rem;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            background: var(--bg-tertiary);
+            overflow: hidden;
         }
 
         .session-prompt-panel summary {
             cursor: pointer;
-            padding: 0.65rem 0.9rem;
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            user-select: none;
-        }
-
-        .session-prompt-body {
-            padding: 0.75rem 0.9rem 0.9rem;
-            border-top: 1px solid var(--border-color);
-        }
-
-        #sessionPromptInput {
-            width: 100%;
-            min-height: 110px;
-            resize: vertical;
-            background: var(--bg-input);
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            color: var(--text-primary);
-            font-size: 0.92rem;
-            font-family: inherit;
-            line-height: 1.4;
-            padding: 0.65rem 0.75rem;
-            margin-bottom: 0.6rem;
-        }
-
-        #sessionPromptInput:focus {
-            outline: none;
-            border-color: var(--accent-color);
-        }
-
-        .session-prompt-actions {
-            display: flex;
-            align-items: center;
-            gap: 0.6rem;
-            flex-wrap: wrap;
-        }
-
-        .session-prompt-btn {
-            border: none;
-            border-radius: 6px;
+            padding: 0.55rem 0.9rem;
             font-size: 0.82rem;
             font-weight: 600;
-            cursor: pointer;
-            padding: 0.42rem 0.75rem;
-        }
-
-        .session-prompt-btn.apply {
-            background: var(--accent-color);
-            color: #fff;
-        }
-
-        .session-prompt-btn.apply:hover:not(:disabled) {
-            background: var(--accent-hover);
-        }
-
-        .session-prompt-btn.clear {
-            background: transparent;
-            color: var(--text-primary);
-            border: 1px solid var(--border-color);
-        }
-
-        .session-prompt-btn.clear:hover:not(:disabled) {
-            background: var(--bg-secondary);
-        }
-
-        .session-prompt-btn:disabled {
-            cursor: not-allowed;
-            opacity: 0.6;
-        }
-
-        .session-prompt-state {
-            font-size: 0.8rem;
             color: var(--text-secondary);
-        }
-
-        .commands-hint code {
-            background: var(--bg-input);
-            padding: 0.2rem 0.4rem;
-            border-radius: 3px;
-            color: var(--accent-color);
-        }
-
-        .message-actions {
-            display: flex;
-            justify-content: flex-end;
-            margin-top: 0.5rem;
-        }
-
-        .copy-btn {
-            background: transparent;
-            border: 1px solid var(--border-color);
-            border-radius: 5px;
-            color: var(--text-secondary);
-            cursor: pointer;
-            font-size: 0.75rem;
-            padding: 0.2rem 0.6rem;
-            transition: all 0.2s;
-        }
-
-        .copy-btn:hover {
-            background: var(--bg-tertiary);
-            color: var(--text-primary);
-        }
-
-        .copy-btn.copied {
-            color: #4caf50;
-            border-color: #4caf50;
-        }
-
-        .reasoning-block {
-            margin: 0.5rem 0;
-            border: 1px solid rgba(125, 86, 244, 0.3);
-            border-radius: 6px;
-            overflow: hidden;
-        }
-
-        .reasoning-block summary {
-            cursor: pointer;
-            padding: 0.4rem 0.75rem;
-            background: rgba(125, 86, 244, 0.1);
-            color: #9d79f5;
-            font-weight: 600;
-            font-size: 0.85rem;
             user-select: none;
             list-style: none;
             display: flex;
@@ -460,85 +471,170 @@ const htmlTemplate = `<!DOCTYPE html>
             gap: 0.4rem;
         }
 
-        .reasoning-block summary::-webkit-details-marker { display: none; }
+        .session-prompt-panel summary::-webkit-details-marker { display: none; }
 
-        .reasoning-block[open] summary { border-bottom: 1px solid rgba(125, 86, 244, 0.2); }
+        .session-prompt-body {
+            padding: 0.7rem 0.9rem 0.85rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        #sessionPromptInput {
+            width: 100%;
+            min-height: 90px;
+            resize: vertical;
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 0.88rem;
+            font-family: inherit;
+            line-height: 1.5;
+            padding: 0.6rem 0.75rem;
+            margin-bottom: 0.5rem;
+            transition: border-color 0.18s;
+        }
+
+        #sessionPromptInput:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px rgba(10,132,255,0.15);
+        }
+
+        .session-prompt-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .session-prompt-btn {
+            border: none;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 0.38rem 0.75rem;
+            transition: background 0.15s, transform 0.1s;
+        }
+
+        .session-prompt-btn.apply { background: var(--accent-color); color: #fff; }
+        .session-prompt-btn.apply:hover:not(:disabled) { background: var(--accent-hover); transform: scale(1.03); }
+        .session-prompt-btn.clear { background: transparent; color: var(--text-primary); border: 1px solid var(--border-color); }
+        .session-prompt-btn.clear:hover:not(:disabled) { background: var(--bg-secondary); }
+        .session-prompt-btn:disabled { cursor: not-allowed; opacity: 0.55; }
+
+        .session-prompt-state { font-size: 0.77rem; color: var(--text-secondary); }
+
+        /* ── Copy button ────────────────────────────────────── */
+        .message-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 0.4rem;
+        }
+
+        .copy-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 7px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 0.72rem;
+            padding: 0.18rem 0.55rem;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .copy-btn:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+        .copy-btn.copied { color: #30d158; border-color: #30d158; }
+
+        /* ── Reasoning collapsible ───────────────────────────── */
+        .reasoning-block {
+            margin: 0.4rem 0;
+            border: 1px solid rgba(191,90,242,0.25);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .reasoning-block summary {
+            cursor: pointer;
+            padding: 0.38rem 0.7rem;
+            background: rgba(191,90,242,0.08);
+            color: var(--reasoning-color);
+            font-weight: 600;
+            font-size: 0.8rem;
+            user-select: none;
+            list-style: none;
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .reasoning-block summary::-webkit-details-marker { display: none; }
+        .reasoning-block[open] summary { border-bottom: 1px solid rgba(191,90,242,0.18); }
 
         .reasoning-content {
-            padding: 0.75rem;
+            padding: 0.7rem;
             margin: 0;
-            font-size: 0.78rem;
+            font-size: 0.77rem;
             color: var(--text-secondary);
             white-space: pre-wrap;
             word-break: break-word;
-            font-family: 'Menlo', 'Courier New', monospace;
-            background: rgba(0, 0, 0, 0.2);
-            max-height: 300px;
+            font-family: 'Menlo', 'SF Mono', 'Courier New', monospace;
+            background: rgba(0,0,0,0.15);
+            max-height: 280px;
             overflow-y: auto;
         }
 
         .reasoning-preview {
-            font-size: 0.78rem;
-            color: #9d79f5;
-            font-family: 'Menlo', 'Courier New', monospace;
-            max-height: 120px;
+            font-size: 0.77rem;
+            color: var(--reasoning-color);
+            font-family: 'Menlo', 'SF Mono', 'Courier New', monospace;
+            max-height: 110px;
             overflow-y: auto;
             white-space: pre-wrap;
             word-break: break-all;
-            margin-top: 0.4rem;
-            padding: 0.4rem 0.5rem;
-            background: rgba(125, 86, 244, 0.06);
-            border-radius: 4px;
-            border-left: 2px solid rgba(125, 86, 244, 0.4);
+            margin-top: 0.35rem;
+            padding: 0.38rem 0.5rem;
+            background: rgba(191,90,242,0.05);
+            border-radius: 6px;
+            border-left: 2px solid rgba(191,90,242,0.35);
         }
 
-        /* Scrollbar styling */
-        ::-webkit-scrollbar {
-            width: 10px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: var(--scrollbar-track);
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: var(--scrollbar-thumb);
-            border-radius: 5px;
-        }
-
-        ::-webkit-scrollbar-thumb:hover {
-            background: var(--scrollbar-thumb-hover);
-        }
+        /* ── Scrollbars (thin, macOS style) ─────────────────── */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+        ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
     </style>
 </head>
 <body>
     <div class="header">
         <div class="header-content">
-            <h1><img src="/static/favicon.png" alt="Local Agent" style="width: 4rem; height: 4rem; vertical-align: middle; margin-right: 0.75rem;"> local-agent [interactive mode]</h1>
+            <img src="/static/favicon.png" alt="Local Agent" class="header-logo">
+            <span class="header-title">local-agent</span>
+            <div class="header-divider"></div>
             <div class="status-bar">
-            <div class="status-item">
-                <span class="status-label">Directory:</span>
-                <span id="directory">-</span>
-            </div>
-            <div class="status-item">
-                <span class="status-label">Model:</span>
-                <span id="model">-</span>
-            </div>
-            <div class="status-item">
-                <span class="status-label">Files:</span>
-                <span id="totalFiles">-</span>
-            </div>
-            <div class="status-item" id="focusItem" style="display: none;">
-                <span class="status-label">Focus:</span>
-                <span id="focusedPath">-</span>
-            </div>
-            <div class="status-item" id="thinkingIndicator" style="display: none;">
-                <span style="color: #7D56F4; font-weight: 600; font-style: italic;">🧠 Thinking Mode</span>
-            </div>
-            <div class="status-item" id="sessionPromptIndicator" style="display: none;">
-                <span class="status-label">Session Prompt:</span>
-                <span>active</span>
-            </div>
+                <div class="status-item">
+                    <span class="status-label">dir</span>
+                    <span id="directory">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">model</span>
+                    <span id="model">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">files</span>
+                    <span id="totalFiles">-</span>
+                </div>
+                <div class="status-item" id="focusItem" style="display:none;">
+                    <span class="status-label">focus</span>
+                    <span id="focusedPath">-</span>
+                </div>
+                <div class="status-item" id="thinkingIndicator" style="display:none;">
+                    <span style="color:var(--reasoning-color);font-weight:600;">🧠 thinking</span>
+                </div>
+                <div class="status-item" id="sessionPromptIndicator" style="display:none;">
+                    <span style="color:#30d158;font-weight:600;">● prompt</span>
+                </div>
             </div>
         </div>
         <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>
@@ -548,28 +644,40 @@ const htmlTemplate = `<!DOCTYPE html>
 
     <div class="input-container">
         <details class="session-prompt-panel" id="sessionPromptPanel">
-            <summary>Session Prompt (applies to every message in this session)</summary>
+            <summary>⚙ Session prompt</summary>
             <div class="session-prompt-body">
-                <textarea id="sessionPromptInput" placeholder="Optional extra instructions for this open session. Leave empty to disable."></textarea>
+                <textarea id="sessionPromptInput" placeholder="Optional extra instructions for every message in this session…"></textarea>
                 <div class="session-prompt-actions">
                     <button id="sessionPromptApply" class="session-prompt-btn apply">Apply</button>
                     <button id="sessionPromptClear" class="session-prompt-btn clear">Clear</button>
-                    <span id="sessionPromptState" class="session-prompt-state">Session prompt is not set.</span>
+                    <span id="sessionPromptState" class="session-prompt-state">Not set.</span>
                 </div>
             </div>
         </details>
         <div class="input-wrapper">
-            <input 
-                type="text" 
-                id="messageInput" 
-                placeholder="Ask a question about your codebase..."
+            <input
+                type="text"
+                id="messageInput"
+                placeholder="Ask about your codebase…"
                 autocomplete="off"
             />
             <button id="sendButton">Send</button>
             <button id="stopButton" disabled>Stop</button>
+            <button id="dirButton" title="Change working directory">Dir</button>
         </div>
         <div class="commands-hint">
-            💡 To know more run: <code>help</code> • 🌐 Web UI: <code>http://localhost:5050</code>
+            type <code>help</code> for commands
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="dirModal">
+        <div class="modal-box">
+            <div class="modal-title">📂 Change working directory</div>
+            <input type="text" id="dirInput" placeholder="/path/to/project" autocomplete="off" spellcheck="false">
+            <div class="modal-actions">
+                <button class="modal-btn cancel" id="dirModalCancel">Cancel</button>
+                <button class="modal-btn confirm" id="dirModalConfirm">Change</button>
+            </div>
         </div>
     </div>
 
@@ -578,6 +686,11 @@ const htmlTemplate = `<!DOCTYPE html>
         const messageInput = document.getElementById('messageInput');
         const sendButton = document.getElementById('sendButton');
         const stopButton = document.getElementById('stopButton');
+        const dirButton = document.getElementById('dirButton');
+        const dirModal = document.getElementById('dirModal');
+        const dirInput = document.getElementById('dirInput');
+        const dirModalCancel = document.getElementById('dirModalCancel');
+        const dirModalConfirm = document.getElementById('dirModalConfirm');
         const sessionPromptPanel = document.getElementById('sessionPromptPanel');
         const sessionPromptInput = document.getElementById('sessionPromptInput');
         const sessionPromptApplyButton = document.getElementById('sessionPromptApply');
@@ -869,6 +982,11 @@ const htmlTemplate = `<!DOCTYPE html>
 
         // Add message to chat
         function addMessage(role, content, timestamp) {
+            // Wrapper keeps bubble + timestamp together
+            const wrapper = document.createElement('div');
+            wrapper.style.cssText = 'display:flex;flex-direction:column;' + (role === 'user' ? 'align-items:flex-end;' : 'align-items:flex-start;');
+            wrapper.style.animation = 'msgIn 0.18s ease';
+
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message ' + role;
 
@@ -884,12 +1002,7 @@ const htmlTemplate = `<!DOCTYPE html>
                 contentDiv.appendChild(div);
             }
 
-            const timeDiv = document.createElement('div');
-            timeDiv.className = 'message-timestamp';
-            timeDiv.textContent = new Date(timestamp).toLocaleTimeString();
-
             messageDiv.appendChild(contentDiv);
-            messageDiv.appendChild(timeDiv);
 
             if (role === 'assistant') {
                 const actionsDiv = document.createElement('div');
@@ -914,7 +1027,14 @@ const htmlTemplate = `<!DOCTYPE html>
                 messageDiv.appendChild(actionsDiv);
             }
 
-            chatContainer.appendChild(messageDiv);
+            // Timestamp sits below bubble, outside it
+            const timeDiv = document.createElement('div');
+            timeDiv.className = 'message-timestamp';
+            timeDiv.textContent = new Date(timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+
+            wrapper.appendChild(messageDiv);
+            wrapper.appendChild(timeDiv);
+            chatContainer.appendChild(wrapper);
         }
 
         // Show loading indicator
@@ -1103,6 +1223,60 @@ const htmlTemplate = `<!DOCTYPE html>
             const isLight = body.classList.contains('light-theme');
             themeToggle.textContent = isLight ? '☀️' : '🌙';
             localStorage.setItem('theme', isLight ? 'light' : 'dark');
+        });
+
+        // Dir button / change directory
+        function openDirModal() {
+            dirInput.value = document.getElementById('directory').textContent.trim() || '';
+            dirModal.classList.add('open');
+            setTimeout(() => { dirInput.focus(); dirInput.select(); }, 50);
+        }
+
+        function closeDirModal() {
+            dirModal.classList.remove('open');
+        }
+
+        async function changeDir() {
+            const path = dirInput.value.trim();
+            if (!path) return;
+
+            dirModalConfirm.disabled = true;
+            dirModalCancel.disabled = true;
+
+            try {
+                const response = await fetch('/api/changedir', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path }),
+                });
+                const data = await response.json();
+                closeDirModal();
+
+                if (data.success && data.message) {
+                    addMessage(data.message.role, data.message.content, data.message.timestamp);
+                    scrollToBottom();
+                    await loadStatus();
+                } else {
+                    addMessage('assistant', '\u274c ' + (data.error || 'Failed to change directory'), new Date().toISOString());
+                    scrollToBottom();
+                }
+            } catch (error) {
+                closeDirModal();
+                addMessage('assistant', '\u274c Network error: ' + error.message, new Date().toISOString());
+                scrollToBottom();
+            } finally {
+                dirModalConfirm.disabled = false;
+                dirModalCancel.disabled = false;
+            }
+        }
+
+        dirButton.addEventListener('click', openDirModal);
+        dirModalCancel.addEventListener('click', closeDirModal);
+        dirModalConfirm.addEventListener('click', changeDir);
+        dirModal.addEventListener('click', (e) => { if (e.target === dirModal) closeDirModal(); });
+        dirInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') changeDir();
+            if (e.key === 'Escape') closeDirModal();
         });
 
         // Event listeners

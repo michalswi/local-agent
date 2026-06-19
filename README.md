@@ -91,6 +91,8 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 
 **Session Prompt:** In Web UI, open the collapsible **Session Prompt** panel to add optional instructions applied to every request in the current interactive session. Use **Apply** to enable or **Clear** to disable; it is not persisted after the session ends.
 
+**Dir button:** In Web UI, click **Dir** (next to Stop) to change the working directory at runtime — overrides the `--dir` flag. The directory is rescanned immediately and the file count updates in the header.
+
 
 ## 🔧 Ollama Setup
 
