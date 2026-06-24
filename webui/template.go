@@ -525,6 +525,44 @@ const htmlTemplate = `<!DOCTYPE html>
 
         .session-prompt-state { font-size: 0.77rem; color: var(--text-secondary); }
 
+        .session-prompt-file-row {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            flex-wrap: wrap;
+            margin-bottom: 0.55rem;
+        }
+
+        .session-prompt-file-input { display: none; }
+
+        .session-prompt-file-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            min-height: 1.5rem;
+            color: var(--text-secondary);
+        }
+
+        .session-prompt-file-dot {
+            width: 0.56rem;
+            height: 0.56rem;
+            border-radius: 999px;
+            background: #8e8e93;
+            flex-shrink: 0;
+        }
+
+        .session-prompt-file-status.loaded .session-prompt-file-dot {
+            background: #30d158;
+        }
+
+        .session-prompt-file-name {
+            font-size: 0.77rem;
+            max-width: 420px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
         /* ── Copy button ────────────────────────────────────── */
         .message-actions {
             display: flex;
@@ -646,6 +684,15 @@ const htmlTemplate = `<!DOCTYPE html>
         <details class="session-prompt-panel" id="sessionPromptPanel">
             <summary>⚙ Session prompt</summary>
             <div class="session-prompt-body">
+                <div class="session-prompt-file-row">
+                    <button id="sessionPromptLoadFile" type="button" class="session-prompt-btn clear">Load prompt file</button>
+                    <button id="sessionPromptDetachFile" type="button" class="session-prompt-btn clear" disabled>Detach file</button>
+                    <input id="sessionPromptFileInput" class="session-prompt-file-input" type="file">
+                    <span id="sessionPromptFileStatus" class="session-prompt-file-status" title="No file attached">
+                        <span class="session-prompt-file-dot" aria-hidden="true"></span>
+                        <span id="sessionPromptFileName" class="session-prompt-file-name">No file attached</span>
+                    </span>
+                </div>
                 <textarea id="sessionPromptInput" placeholder="Optional extra instructions for every message in this session…"></textarea>
                 <div class="session-prompt-actions">
                     <button id="sessionPromptApply" class="session-prompt-btn apply">Apply</button>
@@ -695,10 +742,65 @@ const htmlTemplate = `<!DOCTYPE html>
         const sessionPromptInput = document.getElementById('sessionPromptInput');
         const sessionPromptApplyButton = document.getElementById('sessionPromptApply');
         const sessionPromptClearButton = document.getElementById('sessionPromptClear');
+        const sessionPromptLoadFileButton = document.getElementById('sessionPromptLoadFile');
+        const sessionPromptDetachFileButton = document.getElementById('sessionPromptDetachFile');
+        const sessionPromptFileInput = document.getElementById('sessionPromptFileInput');
+        const sessionPromptFileStatus = document.getElementById('sessionPromptFileStatus');
+        const sessionPromptFileName = document.getElementById('sessionPromptFileName');
         const sessionPromptState = document.getElementById('sessionPromptState');
         let isProcessing = false;
         let isThinkingModel = false;
         let sessionPromptDirty = false;
+        let sessionPromptActiveOnServer = false;
+        let sessionPromptAttachedFileName = '';
+        let sessionPromptAttachedFilePrompt = '';
+        const sessionPromptAttachedFileStorageKey = 'localAgent.sessionPromptAttachedFile';
+
+        function updateSessionPromptIndicator() {
+            const sessionPromptIndicator = document.getElementById('sessionPromptIndicator');
+            if (!sessionPromptIndicator) {
+                return;
+            }
+
+            const shouldShow = sessionPromptActiveOnServer || !!sessionPromptAttachedFileName;
+            sessionPromptIndicator.style.display = shouldShow ? 'flex' : 'none';
+        }
+
+        function persistSessionPromptAttachedFile() {
+            try {
+                if (!sessionPromptAttachedFileName) {
+                    sessionStorage.removeItem(sessionPromptAttachedFileStorageKey);
+                    return;
+                }
+
+                sessionStorage.setItem(sessionPromptAttachedFileStorageKey, JSON.stringify({
+                    fileName: sessionPromptAttachedFileName,
+                    promptText: sessionPromptAttachedFilePrompt,
+                }));
+            } catch (error) {
+                // Ignore storage failures (private mode, quota, disabled storage).
+            }
+        }
+
+        function restoreSessionPromptAttachedFile() {
+            try {
+                const raw = sessionStorage.getItem(sessionPromptAttachedFileStorageKey);
+                if (!raw) {
+                    setSessionPromptAttachedFile('', '');
+                    return;
+                }
+
+                const data = JSON.parse(raw);
+                if (!data || typeof data.fileName !== 'string' || typeof data.promptText !== 'string') {
+                    setSessionPromptAttachedFile('', '');
+                    return;
+                }
+
+                setSessionPromptAttachedFile(data.fileName, data.promptText);
+            } catch (error) {
+                setSessionPromptAttachedFile('', '');
+            }
+        }
 
         // Load initial status
         async function loadStatus() {
@@ -722,10 +824,8 @@ const htmlTemplate = `<!DOCTYPE html>
                 }
 
                 const hasSessionPrompt = !!data.hasSessionPrompt;
-                const sessionPromptIndicator = document.getElementById('sessionPromptIndicator');
-                if (sessionPromptIndicator) {
-                    sessionPromptIndicator.style.display = hasSessionPrompt ? 'flex' : 'none';
-                }
+                sessionPromptActiveOnServer = hasSessionPrompt;
+                updateSessionPromptIndicator();
 
                 if (sessionPromptInput && (!sessionPromptDirty || document.activeElement !== sessionPromptInput)) {
                     sessionPromptInput.value = data.sessionPrompt || '';
@@ -761,6 +861,55 @@ const htmlTemplate = `<!DOCTYPE html>
             sessionPromptState.style.color = isError ? '#ef4444' : 'var(--text-secondary)';
         }
 
+        function normalizePromptText(text) {
+            return String(text || '').replace(/\r\n/g, '\n').trim();
+        }
+
+        function setSessionPromptAttachedFile(fileName, promptText) {
+            sessionPromptAttachedFileName = fileName || '';
+            sessionPromptAttachedFilePrompt = String(promptText || '');
+
+            const loaded = !!sessionPromptAttachedFileName;
+            if (sessionPromptFileStatus && sessionPromptFileName) {
+                sessionPromptFileStatus.classList.toggle('loaded', loaded);
+                sessionPromptFileName.textContent = loaded ? sessionPromptAttachedFileName : 'No file attached';
+                sessionPromptFileStatus.title = loaded ? sessionPromptAttachedFileName : 'No file attached';
+            }
+            if (sessionPromptDetachFileButton) {
+                sessionPromptDetachFileButton.disabled = !loaded;
+            }
+            persistSessionPromptAttachedFile();
+            updateSessionPromptIndicator();
+        }
+
+        function detachSessionPromptFile() {
+            setSessionPromptAttachedFile('', '');
+        }
+
+        async function loadSessionPromptFromFile(file) {
+            if (!file || !sessionPromptInput) {
+                return;
+            }
+
+            try {
+                const content = await file.text();
+                sessionPromptInput.value = content;
+                setSessionPromptAttachedFile(file.name, content);
+                sessionPromptDirty = true;
+                if (sessionPromptPanel) {
+                    sessionPromptPanel.open = true;
+                }
+                updateSessionPromptState('Loaded prompt from file "' + file.name + '". Click Apply to activate.', false);
+            } catch (error) {
+                updateSessionPromptState('Failed to load prompt file: ' + error.message, true);
+                detachSessionPromptFile();
+            } finally {
+                if (sessionPromptFileInput) {
+                    sessionPromptFileInput.value = '';
+                }
+            }
+        }
+
         async function saveSessionPrompt(prompt) {
             const response = await fetch('/api/session-prompt', {
                 method: 'POST',
@@ -783,14 +932,27 @@ const htmlTemplate = `<!DOCTYPE html>
                 return;
             }
 
-            const prompt = sessionPromptInput.value.trim();
+            const promptRaw = sessionPromptInput.value;
+            const prompt = promptRaw.trim();
+            const normalizedPrompt = normalizePromptText(promptRaw);
+            const shouldDetachFile = !!sessionPromptAttachedFileName && normalizedPrompt !== '' && normalizedPrompt !== normalizePromptText(sessionPromptAttachedFilePrompt);
+            if (shouldDetachFile) {
+                detachSessionPromptFile();
+            }
+
             sessionPromptApplyButton.disabled = true;
             sessionPromptClearButton.disabled = true;
 
             try {
                 await saveSessionPrompt(prompt);
                 sessionPromptDirty = false;
-                updateSessionPromptState(prompt ? 'Session prompt saved and active.' : 'Session prompt is not set.', false);
+                sessionPromptActiveOnServer = prompt !== '';
+                updateSessionPromptIndicator();
+                let statusMessage = prompt ? 'Session prompt saved and active.' : 'Session prompt is not set.';
+                if (shouldDetachFile) {
+                    statusMessage += ' Attached prompt file was detached after edits.';
+                }
+                updateSessionPromptState(statusMessage, false);
                 await loadStatus();
             } catch (error) {
                 updateSessionPromptState('Failed to save session prompt: ' + error.message, true);
@@ -1282,6 +1444,28 @@ const htmlTemplate = `<!DOCTYPE html>
         // Event listeners
         sendButton.addEventListener('click', sendMessage);
         stopButton.addEventListener('click', stopProcessing);
+        if (sessionPromptLoadFileButton && sessionPromptFileInput) {
+            sessionPromptLoadFileButton.addEventListener('click', () => {
+                sessionPromptFileInput.click();
+            });
+            sessionPromptFileInput.addEventListener('change', (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (!file) {
+                    return;
+                }
+                loadSessionPromptFromFile(file);
+            });
+        }
+        if (sessionPromptDetachFileButton) {
+            sessionPromptDetachFileButton.addEventListener('click', () => {
+                if (!sessionPromptAttachedFileName) {
+                    return;
+                }
+                detachSessionPromptFile();
+                sessionPromptDirty = true;
+                updateSessionPromptState('Prompt file detached. Current prompt text is unchanged.', false);
+            });
+        }
         if (sessionPromptInput) {
             sessionPromptInput.addEventListener('input', () => {
                 sessionPromptDirty = true;
@@ -1301,6 +1485,7 @@ const htmlTemplate = `<!DOCTYPE html>
         });
 
         // Initialize
+        restoreSessionPromptAttachedFile();
         loadStatus();
         loadMessages();
         messageInput.focus();
