@@ -182,6 +182,36 @@ const htmlTemplate = `<!DOCTYPE html>
             font-size: 0.95rem;
         }
 
+        .file-analysis-block {
+            border: 1px solid var(--border-color);
+            border-radius: 11px;
+            background: var(--bg-primary);
+            overflow: hidden;
+        }
+
+        .file-analysis-block summary {
+            cursor: pointer;
+            list-style: none;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            padding: 0.5rem 0.7rem;
+            font-size: 0.84rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            background: var(--bg-tertiary);
+        }
+
+        .file-analysis-block summary::-webkit-details-marker { display: none; }
+
+        .file-analysis-content {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            padding: 0.62rem 0.7rem 0.72rem;
+        }
+
         .md-table-wrap {
             overflow-x: auto;
             border: 1px solid var(--border-color);
@@ -1111,9 +1141,47 @@ const htmlTemplate = `<!DOCTYPE html>
             flushText();
         }
 
+        function splitFileAnalysisSections(content) {
+            const lines = String(content || '').split('\n');
+            const sections = [];
+            const preamble = [];
+            let activeSection = null;
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const match = line.match(/^===\s*(.+?)\s*===\s*$/);
+
+                if (match) {
+                    if (activeSection) {
+                        sections.push(activeSection);
+                    }
+                    activeSection = {
+                        name: match[1],
+                        lines: [],
+                    };
+                    continue;
+                }
+
+                if (activeSection) {
+                    activeSection.lines.push(line);
+                } else {
+                    preamble.push(line);
+                }
+            }
+
+            if (activeSection) {
+                sections.push(activeSection);
+            }
+
+            return {
+                preamble: preamble.join('\n'),
+                sections: sections,
+            };
+        }
+
         // Render message content, turning [reasoning]...[/reasoning] blocks into
         // collapsible <details> elements and rendering markdown tables in answer text.
-        function renderContent(content, container) {
+        function renderReasoningAndMarkdown(content, container) {
             const re = /\[reasoning\]([\s\S]*?)\[\/reasoning\]\n?/g;
             let lastIndex = 0;
             let match;
@@ -1139,6 +1207,48 @@ const htmlTemplate = `<!DOCTYPE html>
             const remaining = content.slice(lastIndex);
             if (remaining.trim() || !found) {
                 renderMarkdownAwareText(remaining || content, container);
+            }
+        }
+
+        // Render assistant message content with per-file grouping for responses that
+        // use "=== file ===" separators.
+        function renderContent(content, container) {
+            const parsed = splitFileAnalysisSections(content);
+
+            if (!parsed.sections.length) {
+                renderReasoningAndMarkdown(content, container);
+                return;
+            }
+
+            if (parsed.preamble.trim()) {
+                renderReasoningAndMarkdown(parsed.preamble, container);
+            }
+
+            for (let i = 0; i < parsed.sections.length; i++) {
+                const section = parsed.sections[i];
+                const details = document.createElement('details');
+                details.className = 'file-analysis-block';
+                details.open = true;
+
+                const summary = document.createElement('summary');
+                summary.textContent = '\uD83D\uDCC4 ' + section.name;
+
+                const body = document.createElement('div');
+                body.className = 'file-analysis-content';
+
+                const sectionText = section.lines.join('\n');
+                if (sectionText.trim()) {
+                    renderReasoningAndMarkdown(sectionText, body);
+                } else {
+                    const empty = document.createElement('div');
+                    empty.className = 'message-text';
+                    empty.textContent = 'No content returned for this file.';
+                    body.appendChild(empty);
+                }
+
+                details.appendChild(summary);
+                details.appendChild(body);
+                container.appendChild(details);
             }
         }
 
