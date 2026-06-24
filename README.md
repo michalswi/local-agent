@@ -201,7 +201,7 @@ agent:
 **Adjust temperature for different tasks:**
 ```yaml
 llm:
-  temperature: 0.4  # default
+  temperature: 0.5  # default
 ```
 - **0.0-0.3**: Best for code analysis, security audits, bug finding (deterministic)
 - **0.4-0.7**: Good for documentation, explanations, suggestions (balanced)
