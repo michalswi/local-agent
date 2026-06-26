@@ -712,7 +712,7 @@ const htmlTemplate = `<!DOCTYPE html>
 
     <div class="input-container">
         <details class="session-prompt-panel" id="sessionPromptPanel">
-            <summary>⚙ Session prompt</summary>
+            <summary>⚙ Session prompt<span id="sessionPromptSummaryBadge" style="display:none;margin-left:0.45rem;color:#30d158;font-size:0.85em;" title="Session prompt is active">●</span></summary>
             <div class="session-prompt-body">
                 <div class="session-prompt-file-row">
                     <button id="sessionPromptLoadFile" type="button" class="session-prompt-btn clear">Load prompt file</button>
@@ -788,12 +788,15 @@ const htmlTemplate = `<!DOCTYPE html>
 
         function updateSessionPromptIndicator() {
             const sessionPromptIndicator = document.getElementById('sessionPromptIndicator');
-            if (!sessionPromptIndicator) {
-                return;
-            }
+            const sessionPromptSummaryBadge = document.getElementById('sessionPromptSummaryBadge');
 
             const shouldShow = sessionPromptActiveOnServer || !!sessionPromptAttachedFileName;
-            sessionPromptIndicator.style.display = shouldShow ? 'flex' : 'none';
+            if (sessionPromptIndicator) {
+                sessionPromptIndicator.style.display = shouldShow ? 'flex' : 'none';
+            }
+            if (sessionPromptSummaryBadge) {
+                sessionPromptSummaryBadge.style.display = shouldShow ? 'inline' : 'none';
+            }
         }
 
         function persistSessionPromptAttachedFile() {
