@@ -748,6 +748,17 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 		}
 	}
 
+	sendDone := func(name string, elapsed time.Duration) {
+		if progressCh != nil {
+			select {
+			case progressCh <- fmt.Sprintf("DONE:%s:%.2fs", name, elapsed.Seconds()):
+			default:
+			}
+		}
+	}
+
+	fileStartTimes := make(map[string]time.Time)
+
 	// Filter to readable files within token limit
 	var validFiles []*types.FileInfo
 	for _, f := range files {
@@ -804,6 +815,7 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
+			fileStartTimes[file.RelPath] = time.Now()
 			sendThinking(file.RelPath)
 			results[i] = processFile(i, file)
 			if errors.Is(results[i].err, context.Canceled) {
@@ -815,6 +827,7 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 				}
 			}
 			sendProgress(i+1, len(validFiles), file.RelPath)
+			sendDone(file.RelPath, time.Since(fileStartTimes[file.RelPath]))
 		}
 	} else {
 		type job struct {
@@ -825,6 +838,7 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 		resCh := make(chan fileResult, len(validFiles))
 
 		var wg sync.WaitGroup
+		var fileStartMu sync.Mutex
 		for w := 0; w < maxConcurrent; w++ {
 			wg.Add(1)
 			go func() {
@@ -834,6 +848,9 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 						resCh <- fileResult{idx: j.idx, name: j.file.RelPath, err: err}
 						continue
 					}
+					fileStartMu.Lock()
+					fileStartTimes[j.file.RelPath] = time.Now()
+					fileStartMu.Unlock()
 					sendThinking(j.file.RelPath)
 					result := processFile(j.idx, j.file)
 					for _, line := range strings.Split(result.thinking, "\n") {
@@ -841,6 +858,10 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 							sendThinkLine(line)
 						}
 					}
+					fileStartMu.Lock()
+					elapsed := time.Since(fileStartTimes[j.file.RelPath])
+					fileStartMu.Unlock()
+					sendDone(j.file.RelPath, elapsed)
 					resCh <- result
 				}
 			}()

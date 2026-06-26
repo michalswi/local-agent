@@ -1328,19 +1328,28 @@ const htmlTemplate = `<!DOCTYPE html>
             scrollToBottom();
         }
 
-        const _activeFiles = new Set();
+        const _activeFiles = new Map(); // name -> start timestamp (ms)
+        const _doneFiles = new Map();   // name -> elapsed string
 
         function _renderActiveList() {
             const ul = document.getElementById('activeFileList');
             if (!ul) return;
             ul.innerHTML = '';
-            _activeFiles.forEach(function(name) {
+            const now = Date.now();
+            _activeFiles.forEach(function(startMs, name) {
+                const elapsed = ((now - startMs) / 1000).toFixed(1);
                 const li = document.createElement('li');
                 li.style.cssText = 'font-size:0.78rem;color:var(--text-secondary);padding:0.1rem 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-                li.textContent = '\u2022 ' + name;
+                li.textContent = '\u23f3 ' + name + ' (' + elapsed + 's…)';
                 ul.appendChild(li);
             });
-            ul.style.display = _activeFiles.size > 0 ? 'block' : 'none';
+            _doneFiles.forEach(function(elapsed, name) {
+                const li = document.createElement('li');
+                li.style.cssText = 'font-size:0.78rem;color:var(--text-secondary);padding:0.1rem 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0.75;';
+                li.textContent = '\u2713 ' + name + ' (' + elapsed + ')';
+                ul.appendChild(li);
+            });
+            ul.style.display = (_activeFiles.size + _doneFiles.size) > 0 ? 'block' : 'none';
             scrollToBottom();
         }
 
@@ -1384,6 +1393,7 @@ const htmlTemplate = `<!DOCTYPE html>
             stopButton.disabled = false;
             messageInput.disabled = true;
             _activeFiles.clear();
+            _doneFiles.clear();
             _renderActiveList();
 
             // Add user message
@@ -1402,12 +1412,21 @@ const htmlTemplate = `<!DOCTYPE html>
                     appendThinkLine(e.data.substring(6));
                 } else if (e.data.startsWith('ANALYZING:')) {
                     const name = e.data.substring(10);
-                    _activeFiles.add(name);
+                    _activeFiles.set(name, Date.now());
+                    _renderActiveList();
+                } else if (e.data.startsWith('DONE:')) {
+                    // "DONE:<name>:<elapsed>" — file finished, move to done list
+                    const rest = e.data.substring(5);
+                    const lastColon = rest.lastIndexOf(':');
+                    if (lastColon !== -1) {
+                        const name = rest.substring(0, lastColon);
+                        const elapsed = rest.substring(lastColon + 1);
+                        _activeFiles.delete(name);
+                        _doneFiles.set(name, elapsed);
+                    }
                     _renderActiveList();
                 } else if (e.data.startsWith('Reviewed ')) {
-                    // "Reviewed N/M: filename" — file done, remove from list
-                    const colon = e.data.indexOf(': ');
-                    if (colon !== -1) { _activeFiles.delete(e.data.substring(colon + 2)); }
+                    // "Reviewed N/M: filename" — update progress text
                     _renderActiveList();
                     updateLoadingText(e.data);
                     scrollToBottom();
@@ -1456,6 +1475,7 @@ const htmlTemplate = `<!DOCTYPE html>
                 messageInput.disabled = false;
                 messageInput.focus();
                 _activeFiles.clear();
+                _doneFiles.clear();
                 _renderActiveList();
             }
         }
