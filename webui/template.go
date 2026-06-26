@@ -782,6 +782,7 @@ const htmlTemplate = `<!DOCTYPE html>
         let isThinkingModel = false;
         let sessionPromptDirty = false;
         let _runStartTime = 0;
+        let _processingViaPoll = false; // true when processing detected via status poll (refresh/other tab)
         let sessionPromptActiveOnServer = false;
         let sessionPromptAttachedFileName = '';
         let sessionPromptAttachedFilePrompt = '';
@@ -867,6 +868,59 @@ const htmlTemplate = `<!DOCTYPE html>
 
                 if (!sessionPromptDirty) {
                     updateSessionPromptState(hasSessionPrompt ? 'Session prompt is active for this session.' : 'Session prompt is not set.', false);
+                }
+
+                // Restore in-progress analysis state on refresh / other tab
+                const wasProcessingViaPoll = _processingViaPoll;
+                if (data.isProcessing) {
+                    if (!isProcessing) {
+                        isProcessing = true;
+                        _processingViaPoll = true;
+                        sendButton.disabled = true;
+                        stopButton.disabled = false;
+                        messageInput.disabled = true;
+                        if (!document.getElementById('loading')) {
+                            showLoading();
+                        }
+                    }
+                    if (data.progress && _processingViaPoll) {
+                        _activeFiles.clear();
+                        _doneFiles.clear();
+                        if (data.progress.active) {
+                            Object.entries(data.progress.active).forEach(function([name, startMs]) {
+                                _activeFiles.set(name, Number(startMs));
+                            });
+                        }
+                        if (data.progress.done) {
+                            Object.entries(data.progress.done).forEach(function([name, elapsed]) {
+                                _doneFiles.set(name, elapsed);
+                            });
+                        }
+                        _renderActiveList();
+                        if (data.progress.statusText) {
+                            const st = data.progress.statusText;
+                            const colonIdx = st.indexOf(': ');
+                            updateLoadingText(st.startsWith('Reviewed ') && colonIdx !== -1 ? st.substring(0, colonIdx) : st);
+                        }
+                        if (data.progress.runStartMs && !_runStartTime) {
+                            _runStartTime = data.progress.runStartMs;
+                        }
+                    }
+                } else if (_processingViaPoll && wasProcessingViaPoll) {
+                    // Analysis finished, detected via poll
+                    _processingViaPoll = false;
+                    isProcessing = false;
+                    sendButton.disabled = false;
+                    stopButton.disabled = true;
+                    stopButton.textContent = 'Stop';
+                    messageInput.disabled = false;
+                    _activeFiles.clear();
+                    _doneFiles.clear();
+                    _runStartTime = 0;
+                    _renderActiveList();
+                    hideLoading();
+                    await loadMessages();
+                    scrollToBottom();
                 }
             } catch (error) {
                 console.error('Failed to load status:', error);
@@ -1655,12 +1709,16 @@ const htmlTemplate = `<!DOCTYPE html>
 
         // Initialize
         restoreSessionPromptAttachedFile();
-        loadStatus();
-        loadMessages();
-        messageInput.focus();
+        (async () => {
+            await loadMessages();
+            await loadStatus();
+            messageInput.focus();
+        })();
 
         // Auto-refresh status every 5 seconds
         setInterval(loadStatus, 5000);
+        // Fast poll while a run is in progress via reconnected view (refresh / other tab)
+        setInterval(function() { if (_processingViaPoll) loadStatus(); }, 2000);
     </script>
 </body>
 </html>
