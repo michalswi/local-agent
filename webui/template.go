@@ -781,6 +781,7 @@ const htmlTemplate = `<!DOCTYPE html>
         let isProcessing = false;
         let isThinkingModel = false;
         let sessionPromptDirty = false;
+        let _runStartTime = 0;
         let sessionPromptActiveOnServer = false;
         let sessionPromptAttachedFileName = '';
         let sessionPromptAttachedFilePrompt = '';
@@ -1334,6 +1335,35 @@ const htmlTemplate = `<!DOCTYPE html>
         const _activeFiles = new Map(); // name -> start timestamp (ms)
         const _doneFiles = new Map();   // name -> elapsed string
 
+        function _insertReviewSummary() {
+            const count = _doneFiles.size;
+            if (count === 0) return;
+            const wallSec = (Date.now() - _runStartTime) / 1000;
+            let sumSec = 0;
+            _doneFiles.forEach(function(elapsed) {
+                sumSec += parseFloat(elapsed) || 0;
+            });
+            function fmtDur(sec) {
+                if (sec < 60) return sec.toFixed(1) + 's';
+                const m = Math.floor(sec / 60);
+                const s = Math.round(sec % 60);
+                return m + 'm ' + s + 's';
+            }
+            const chip = document.createElement('div');
+            chip.style.cssText = [
+                'font-size:0.75rem',
+                'color:var(--text-label)',
+                'text-align:center',
+                'padding:0.25rem 0 0.5rem',
+                'user-select:none',
+            ].join(';');
+            chip.textContent = '\u2713 ' + count + ' file' + (count > 1 ? 's' : '') +
+                ' reviewed \u00b7 ' + fmtDur(wallSec) + ' wall \u00b7 ' +
+                fmtDur(sumSec) + ' LLM';
+            chip.title = 'Wall time: total real-world time from send to answer.\nLLM time: sum of all per-file LLM durations (exceeds wall time when files run concurrently).';
+            chatContainer.appendChild(chip);
+        }
+
         function _renderActiveList() {
             const ul = document.getElementById('activeFileList');
             if (!ul) return;
@@ -1398,6 +1428,7 @@ const htmlTemplate = `<!DOCTYPE html>
             _activeFiles.clear();
             _doneFiles.clear();
             _renderActiveList();
+            _runStartTime = Date.now();
 
             // Add user message
             addMessage('user', message, new Date().toISOString());
@@ -1429,9 +1460,10 @@ const htmlTemplate = `<!DOCTYPE html>
                     }
                     _renderActiveList();
                 } else if (e.data.startsWith('Reviewed ')) {
-                    // "Reviewed N/M: filename" — update progress text
+                    // "Reviewed N/M: filename" — update progress text (strip filename, it's already in the list)
                     _renderActiveList();
-                    updateLoadingText(e.data);
+                    const colonIdx = e.data.indexOf(': ');
+                    updateLoadingText(colonIdx !== -1 ? e.data.substring(0, colonIdx) : e.data);
                     scrollToBottom();
                 } else {
                     updateLoadingText(e.data);
@@ -1452,6 +1484,10 @@ const htmlTemplate = `<!DOCTYPE html>
                 const data = await response.json();
                 evtSource.close();
                 hideLoading();
+
+                if (_doneFiles.size > 0) {
+                    _insertReviewSummary();
+                }
 
                 if (data.success && data.message) {
                     addMessage(data.message.role, data.message.content, data.message.timestamp);

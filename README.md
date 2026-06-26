@@ -91,6 +91,10 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 
 **Session Prompt:** In Web UI, open the collapsible **Session Prompt** panel to add optional instructions applied to every request in the current interactive session. Use **Apply** to enable or **Clear** to disable; it is not persisted after the session ends.
 
+**Review summary (Web UI):** After every multi-file analysis a summary line appears in the chat, e.g. `✓ 4 files reviewed · 4m 18s wall · 8m 53s LLM`. Hover it for details.
+- **Wall time** — real-world elapsed time from when you pressed Send until the answer arrived.
+- **LLM time** — sum of individual per-file LLM durations. With concurrent processing this exceeds wall time (e.g. 4 files running in parallel each taking 2 min = 8 min LLM but ~2 min wall).
+
 **Dir button:** In Web UI, click **Dir** (next to Stop) to change the working directory at runtime — overrides the `--dir` flag. The directory is rescanned immediately and the file count updates in the header.
 
 
