@@ -37,6 +37,8 @@ type Server struct {
 	mu            sync.RWMutex
 	progressCh    chan string
 	progressMu    sync.Mutex
+	progSnap      ProgressSnapshot
+	progSnapMu    sync.RWMutex
 	runMu         sync.Mutex
 	runCancel     context.CancelFunc
 	runActiveID   uint64
@@ -45,9 +47,10 @@ type Server struct {
 
 // Message represents a chat message
 type Message struct {
-	Role      string    `json:"role"`
-	Content   string    `json:"content"`
-	Timestamp time.Time `json:"timestamp"`
+	Role          string    `json:"role"`
+	Content       string    `json:"content"`
+	Timestamp     time.Time `json:"timestamp"`
+	ReviewSummary string    `json:"reviewSummary,omitempty"`
 }
 
 // ChatRequest represents an incoming chat message
@@ -68,16 +71,27 @@ type ChatResponse struct {
 	Messages []Message `json:"messages,omitempty"`
 }
 
+// ProgressSnapshot holds the live state of a running analysis so that
+// refreshed or newly-opened browser tabs can reconstruct the progress view
+// without an active SSE connection.
+type ProgressSnapshot struct {
+	Active     map[string]int64  `json:"active"` // name → Unix start ms
+	Done       map[string]string `json:"done"`   // name → elapsed string
+	StatusText string            `json:"statusText"`
+	RunStartMs int64             `json:"runStartMs"`
+}
+
 // StatusResponse represents the current status
 type StatusResponse struct {
-	Directory        string `json:"directory"`
-	Model            string `json:"model"`
-	TotalFiles       int    `json:"totalFiles"`
-	FocusedPath      string `json:"focusedPath,omitempty"`
-	SessionPrompt    string `json:"sessionPrompt,omitempty"`
-	HasSessionPrompt bool   `json:"hasSessionPrompt"`
-	IsThinking       bool   `json:"isThinking"`
-	IsProcessing     bool   `json:"isProcessing"`
+	Directory        string            `json:"directory"`
+	Model            string            `json:"model"`
+	TotalFiles       int               `json:"totalFiles"`
+	FocusedPath      string            `json:"focusedPath,omitempty"`
+	SessionPrompt    string            `json:"sessionPrompt,omitempty"`
+	HasSessionPrompt bool              `json:"hasSessionPrompt"`
+	IsThinking       bool              `json:"isThinking"`
+	IsProcessing     bool              `json:"isProcessing"`
+	Progress         *ProgressSnapshot `json:"progress,omitempty"`
 }
 
 // NewServer creates a new web UI server
@@ -140,6 +154,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	sessionPrompt := strings.TrimSpace(s.sessionPrompt)
 	defer s.mu.RUnlock()
 
+	processing := s.isProcessing()
 	status := StatusResponse{
 		Directory:        s.directory,
 		Model:            s.model,
@@ -148,7 +163,26 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		SessionPrompt:    sessionPrompt,
 		HasSessionPrompt: sessionPrompt != "",
 		IsThinking:       llm.IsThinkingModel(s.model),
-		IsProcessing:     s.isProcessing(),
+		IsProcessing:     processing,
+	}
+
+	if processing {
+		s.progSnapMu.RLock()
+		active := make(map[string]int64, len(s.progSnap.Active))
+		for k, v := range s.progSnap.Active {
+			active[k] = v
+		}
+		done := make(map[string]string, len(s.progSnap.Done))
+		for k, v := range s.progSnap.Done {
+			done[k] = v
+		}
+		status.Progress = &ProgressSnapshot{
+			Active:     active,
+			Done:       done,
+			StatusText: s.progSnap.StatusText,
+			RunStartMs: s.progSnap.RunStartMs,
+		}
+		s.progSnapMu.RUnlock()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -234,6 +268,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.progressCh = make(chan string, 100)
 	s.progressMu.Unlock()
 
+	s.progSnapMu.Lock()
+	s.progSnap = ProgressSnapshot{
+		Active:     make(map[string]int64),
+		Done:       make(map[string]string),
+		RunStartMs: time.Now().UnixMilli(),
+	}
+	s.progSnapMu.Unlock()
+
 	ctx, runID, err := s.beginRun(r.Context())
 	if err != nil {
 		s.progressMu.Lock()
@@ -279,9 +321,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg := Message{
-		Role:      "assistant",
-		Content:   analysisResp.Response,
-		Timestamp: time.Now(),
+		Role:          "assistant",
+		Content:       analysisResp.Response,
+		Timestamp:     time.Now(),
+		ReviewSummary: s.buildReviewSummary(analysisResp),
 	}
 
 	s.mu.Lock()
@@ -320,7 +363,11 @@ func (s *Server) beginRun(parent context.Context) (context.Context, uint64, erro
 		return nil, 0, fmt.Errorf("analysis is already running")
 	}
 
-	ctx, cancel := context.WithCancel(parent)
+	// Use context.Background() so that an HTTP disconnect (browser refresh)
+	// does not cancel the running analysis. The Stop button cancels via
+	// stopProcessing() which calls cancel() directly.
+	_ = parent
+	ctx, cancel := context.WithCancel(context.Background())
 	s.nextRunID++
 	s.runActiveID = s.nextRunID
 	s.runCancel = cancel
@@ -722,15 +769,22 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 	s.progressMu.Unlock()
 
 	sendProgress := func(current, total int, name string) {
+		text := fmt.Sprintf("Reviewed %d/%d: %s", current, total, name)
+		s.progSnapMu.Lock()
+		s.progSnap.StatusText = text
+		s.progSnapMu.Unlock()
 		if progressCh != nil {
 			select {
-			case progressCh <- fmt.Sprintf("Reviewed %d/%d: %s", current, total, name):
+			case progressCh <- text:
 			default:
 			}
 		}
 	}
 
 	sendThinking := func(name string) {
+		s.progSnapMu.Lock()
+		s.progSnap.Active[name] = time.Now().UnixMilli()
+		s.progSnapMu.Unlock()
 		if progressCh != nil {
 			select {
 			case progressCh <- "ANALYZING:" + name:
@@ -747,6 +801,22 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 			}
 		}
 	}
+
+	sendDone := func(name string, elapsed time.Duration) {
+		elapsedStr := fmt.Sprintf("%.2fs", elapsed.Seconds())
+		s.progSnapMu.Lock()
+		delete(s.progSnap.Active, name)
+		s.progSnap.Done[name] = elapsedStr
+		s.progSnapMu.Unlock()
+		if progressCh != nil {
+			select {
+			case progressCh <- fmt.Sprintf("DONE:%s:%s", name, elapsedStr):
+			default:
+			}
+		}
+	}
+
+	fileStartTimes := make(map[string]time.Time)
 
 	// Filter to readable files within token limit
 	var validFiles []*types.FileInfo
@@ -804,6 +874,7 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
+			fileStartTimes[file.RelPath] = time.Now()
 			sendThinking(file.RelPath)
 			results[i] = processFile(i, file)
 			if errors.Is(results[i].err, context.Canceled) {
@@ -815,6 +886,7 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 				}
 			}
 			sendProgress(i+1, len(validFiles), file.RelPath)
+			sendDone(file.RelPath, time.Since(fileStartTimes[file.RelPath]))
 		}
 	} else {
 		type job struct {
@@ -825,6 +897,7 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 		resCh := make(chan fileResult, len(validFiles))
 
 		var wg sync.WaitGroup
+		var fileStartMu sync.Mutex
 		for w := 0; w < maxConcurrent; w++ {
 			wg.Add(1)
 			go func() {
@@ -834,6 +907,9 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 						resCh <- fileResult{idx: j.idx, name: j.file.RelPath, err: err}
 						continue
 					}
+					fileStartMu.Lock()
+					fileStartTimes[j.file.RelPath] = time.Now()
+					fileStartMu.Unlock()
 					sendThinking(j.file.RelPath)
 					result := processFile(j.idx, j.file)
 					for _, line := range strings.Split(result.thinking, "\n") {
@@ -841,6 +917,10 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 							sendThinkLine(line)
 						}
 					}
+					fileStartMu.Lock()
+					elapsed := time.Since(fileStartTimes[j.file.RelPath])
+					fileStartMu.Unlock()
+					sendDone(j.file.RelPath, elapsed)
 					resCh <- result
 				}
 			}()
@@ -905,6 +985,41 @@ func (s *Server) buildQuestionWithSessionPrompt(question string) string {
 	}
 
 	return fmt.Sprintf("Session-level instructions (apply to this request):\n%s\n\nUser request:\n%s", sessionPrompt, question)
+}
+
+func (s *Server) buildReviewSummary(resp *types.AnalysisResponse) string {
+	s.progSnapMu.RLock()
+	count := len(s.progSnap.Done)
+	runStartMs := s.progSnap.RunStartMs
+	done := s.progSnap.Done
+	s.progSnapMu.RUnlock()
+
+	if count == 0 {
+		return ""
+	}
+
+	wallSec := float64(time.Now().UnixMilli()-runStartMs) / 1000
+	var sumSec float64
+	for _, elapsed := range done {
+		var v float64
+		fmt.Sscanf(elapsed, "%fs", &v)
+		sumSec += v
+	}
+
+	fmtDur := func(sec float64) string {
+		if sec < 60 {
+			return fmt.Sprintf("%.1fs", sec)
+		}
+		m := int(sec) / 60
+		s := int(sec) % 60
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+
+	noun := "file"
+	if count > 1 {
+		noun = "files"
+	}
+	return fmt.Sprintf("✓ %d %s reviewed · %s wall · %s LLM", count, noun, fmtDur(wallSec), fmtDur(sumSec))
 }
 
 func (s *Server) saveSession(question string, resp *types.AnalysisResponse) {

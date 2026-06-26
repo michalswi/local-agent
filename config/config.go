@@ -63,6 +63,7 @@ type ChunkingConfig struct {
 func DefaultConfig() *Config {
 	// Read from environment variables with defaults
 	tokenLimit := 4000
+	// OLLAMA_CONTEXT_LENGTH related
 	if val := os.Getenv("AGENT_TOKEN_LIMIT"); val != "" {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			tokenLimit = parsed
@@ -70,6 +71,7 @@ func DefaultConfig() *Config {
 	}
 
 	concurrentFiles := 1
+	// OLLAMA_NUM_PARALLEL related
 	if val := os.Getenv("AGENT_CONCURRENT_FILES"); val != "" {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			concurrentFiles = parsed
@@ -86,7 +88,7 @@ func DefaultConfig() *Config {
 			Provider:    "ollama",
 			Endpoint:    "http://localhost:11434",
 			Model:       "gemma4:e2b",
-			Temperature: 0.4,
+			Temperature: 0.5,
 			Timeout:     300, // 5 minutes for large batches
 		},
 		Filters: FilterConfig{

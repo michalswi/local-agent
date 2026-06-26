@@ -182,6 +182,36 @@ const htmlTemplate = `<!DOCTYPE html>
             font-size: 0.95rem;
         }
 
+        .file-analysis-block {
+            border: 1px solid var(--border-color);
+            border-radius: 11px;
+            background: var(--bg-primary);
+            overflow: hidden;
+        }
+
+        .file-analysis-block summary {
+            cursor: pointer;
+            list-style: none;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            padding: 0.5rem 0.7rem;
+            font-size: 0.84rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            background: var(--bg-tertiary);
+        }
+
+        .file-analysis-block summary::-webkit-details-marker { display: none; }
+
+        .file-analysis-content {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            padding: 0.62rem 0.7rem 0.72rem;
+        }
+
         .md-table-wrap {
             overflow-x: auto;
             border: 1px solid var(--border-color);
@@ -525,6 +555,44 @@ const htmlTemplate = `<!DOCTYPE html>
 
         .session-prompt-state { font-size: 0.77rem; color: var(--text-secondary); }
 
+        .session-prompt-file-row {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            flex-wrap: wrap;
+            margin-bottom: 0.55rem;
+        }
+
+        .session-prompt-file-input { display: none; }
+
+        .session-prompt-file-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            min-height: 1.5rem;
+            color: var(--text-secondary);
+        }
+
+        .session-prompt-file-dot {
+            width: 0.56rem;
+            height: 0.56rem;
+            border-radius: 999px;
+            background: #8e8e93;
+            flex-shrink: 0;
+        }
+
+        .session-prompt-file-status.loaded .session-prompt-file-dot {
+            background: #30d158;
+        }
+
+        .session-prompt-file-name {
+            font-size: 0.77rem;
+            max-width: 420px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
         /* ── Copy button ────────────────────────────────────── */
         .message-actions {
             display: flex;
@@ -644,8 +712,17 @@ const htmlTemplate = `<!DOCTYPE html>
 
     <div class="input-container">
         <details class="session-prompt-panel" id="sessionPromptPanel">
-            <summary>⚙ Session prompt</summary>
+            <summary>⚙ Session prompt<span id="sessionPromptSummaryBadge" style="display:none;margin-left:0.45rem;color:#30d158;font-size:0.85em;" title="Session prompt is active">●</span></summary>
             <div class="session-prompt-body">
+                <div class="session-prompt-file-row">
+                    <button id="sessionPromptLoadFile" type="button" class="session-prompt-btn clear">Load prompt file</button>
+                    <button id="sessionPromptDetachFile" type="button" class="session-prompt-btn clear" disabled>Detach file</button>
+                    <input id="sessionPromptFileInput" class="session-prompt-file-input" type="file">
+                    <span id="sessionPromptFileStatus" class="session-prompt-file-status" title="No file attached">
+                        <span class="session-prompt-file-dot" aria-hidden="true"></span>
+                        <span id="sessionPromptFileName" class="session-prompt-file-name">No file attached</span>
+                    </span>
+                </div>
                 <textarea id="sessionPromptInput" placeholder="Optional extra instructions for every message in this session…"></textarea>
                 <div class="session-prompt-actions">
                     <button id="sessionPromptApply" class="session-prompt-btn apply">Apply</button>
@@ -695,10 +772,70 @@ const htmlTemplate = `<!DOCTYPE html>
         const sessionPromptInput = document.getElementById('sessionPromptInput');
         const sessionPromptApplyButton = document.getElementById('sessionPromptApply');
         const sessionPromptClearButton = document.getElementById('sessionPromptClear');
+        const sessionPromptLoadFileButton = document.getElementById('sessionPromptLoadFile');
+        const sessionPromptDetachFileButton = document.getElementById('sessionPromptDetachFile');
+        const sessionPromptFileInput = document.getElementById('sessionPromptFileInput');
+        const sessionPromptFileStatus = document.getElementById('sessionPromptFileStatus');
+        const sessionPromptFileName = document.getElementById('sessionPromptFileName');
         const sessionPromptState = document.getElementById('sessionPromptState');
         let isProcessing = false;
         let isThinkingModel = false;
         let sessionPromptDirty = false;
+        let _runStartTime = 0;
+        let _processingViaPoll = false; // true when processing detected via status poll (refresh/other tab)
+        let sessionPromptActiveOnServer = false;
+        let sessionPromptAttachedFileName = '';
+        let sessionPromptAttachedFilePrompt = '';
+        const sessionPromptAttachedFileStorageKey = 'localAgent.sessionPromptAttachedFile';
+
+        function updateSessionPromptIndicator() {
+            const sessionPromptIndicator = document.getElementById('sessionPromptIndicator');
+            const sessionPromptSummaryBadge = document.getElementById('sessionPromptSummaryBadge');
+
+            const shouldShow = sessionPromptActiveOnServer || !!sessionPromptAttachedFileName;
+            if (sessionPromptIndicator) {
+                sessionPromptIndicator.style.display = shouldShow ? 'flex' : 'none';
+            }
+            if (sessionPromptSummaryBadge) {
+                sessionPromptSummaryBadge.style.display = shouldShow ? 'inline' : 'none';
+            }
+        }
+
+        function persistSessionPromptAttachedFile() {
+            try {
+                if (!sessionPromptAttachedFileName) {
+                    sessionStorage.removeItem(sessionPromptAttachedFileStorageKey);
+                    return;
+                }
+
+                sessionStorage.setItem(sessionPromptAttachedFileStorageKey, JSON.stringify({
+                    fileName: sessionPromptAttachedFileName,
+                    promptText: sessionPromptAttachedFilePrompt,
+                }));
+            } catch (error) {
+                // Ignore storage failures (private mode, quota, disabled storage).
+            }
+        }
+
+        function restoreSessionPromptAttachedFile() {
+            try {
+                const raw = sessionStorage.getItem(sessionPromptAttachedFileStorageKey);
+                if (!raw) {
+                    setSessionPromptAttachedFile('', '');
+                    return;
+                }
+
+                const data = JSON.parse(raw);
+                if (!data || typeof data.fileName !== 'string' || typeof data.promptText !== 'string') {
+                    setSessionPromptAttachedFile('', '');
+                    return;
+                }
+
+                setSessionPromptAttachedFile(data.fileName, data.promptText);
+            } catch (error) {
+                setSessionPromptAttachedFile('', '');
+            }
+        }
 
         // Load initial status
         async function loadStatus() {
@@ -722,10 +859,8 @@ const htmlTemplate = `<!DOCTYPE html>
                 }
 
                 const hasSessionPrompt = !!data.hasSessionPrompt;
-                const sessionPromptIndicator = document.getElementById('sessionPromptIndicator');
-                if (sessionPromptIndicator) {
-                    sessionPromptIndicator.style.display = hasSessionPrompt ? 'flex' : 'none';
-                }
+                sessionPromptActiveOnServer = hasSessionPrompt;
+                updateSessionPromptIndicator();
 
                 if (sessionPromptInput && (!sessionPromptDirty || document.activeElement !== sessionPromptInput)) {
                     sessionPromptInput.value = data.sessionPrompt || '';
@@ -733,6 +868,59 @@ const htmlTemplate = `<!DOCTYPE html>
 
                 if (!sessionPromptDirty) {
                     updateSessionPromptState(hasSessionPrompt ? 'Session prompt is active for this session.' : 'Session prompt is not set.', false);
+                }
+
+                // Restore in-progress analysis state on refresh / other tab
+                const wasProcessingViaPoll = _processingViaPoll;
+                if (data.isProcessing) {
+                    if (!isProcessing) {
+                        isProcessing = true;
+                        _processingViaPoll = true;
+                        sendButton.disabled = true;
+                        stopButton.disabled = false;
+                        messageInput.disabled = true;
+                        if (!document.getElementById('loading')) {
+                            showLoading();
+                        }
+                    }
+                    if (data.progress && _processingViaPoll) {
+                        _activeFiles.clear();
+                        _doneFiles.clear();
+                        if (data.progress.active) {
+                            Object.entries(data.progress.active).forEach(function([name, startMs]) {
+                                _activeFiles.set(name, Number(startMs));
+                            });
+                        }
+                        if (data.progress.done) {
+                            Object.entries(data.progress.done).forEach(function([name, elapsed]) {
+                                _doneFiles.set(name, elapsed);
+                            });
+                        }
+                        _renderActiveList();
+                        if (data.progress.statusText) {
+                            const st = data.progress.statusText;
+                            const colonIdx = st.indexOf(': ');
+                            updateLoadingText(st.startsWith('Reviewed ') && colonIdx !== -1 ? st.substring(0, colonIdx) : st);
+                        }
+                        if (data.progress.runStartMs && !_runStartTime) {
+                            _runStartTime = data.progress.runStartMs;
+                        }
+                    }
+                } else if (_processingViaPoll && wasProcessingViaPoll) {
+                    // Analysis finished, detected via poll
+                    _processingViaPoll = false;
+                    isProcessing = false;
+                    sendButton.disabled = false;
+                    stopButton.disabled = true;
+                    stopButton.textContent = 'Stop';
+                    messageInput.disabled = false;
+                    _activeFiles.clear();
+                    _doneFiles.clear();
+                    _runStartTime = 0;
+                    _renderActiveList();
+                    hideLoading();
+                    await loadMessages();
+                    scrollToBottom();
                 }
             } catch (error) {
                 console.error('Failed to load status:', error);
@@ -745,7 +933,7 @@ const htmlTemplate = `<!DOCTYPE html>
                 const response = await fetch('/api/messages');
                 const messages = await response.json();
                 chatContainer.innerHTML = '';
-                messages.forEach(msg => addMessage(msg.role, msg.content, msg.timestamp));
+                messages.forEach(msg => addMessage(msg.role, msg.content, msg.timestamp, msg.reviewSummary || null));
                 scrollToBottom();
             } catch (error) {
                 console.error('Failed to load messages:', error);
@@ -759,6 +947,55 @@ const htmlTemplate = `<!DOCTYPE html>
 
             sessionPromptState.textContent = message;
             sessionPromptState.style.color = isError ? '#ef4444' : 'var(--text-secondary)';
+        }
+
+        function normalizePromptText(text) {
+            return String(text || '').replace(/\r\n/g, '\n').trim();
+        }
+
+        function setSessionPromptAttachedFile(fileName, promptText) {
+            sessionPromptAttachedFileName = fileName || '';
+            sessionPromptAttachedFilePrompt = String(promptText || '');
+
+            const loaded = !!sessionPromptAttachedFileName;
+            if (sessionPromptFileStatus && sessionPromptFileName) {
+                sessionPromptFileStatus.classList.toggle('loaded', loaded);
+                sessionPromptFileName.textContent = loaded ? sessionPromptAttachedFileName : 'No file attached';
+                sessionPromptFileStatus.title = loaded ? sessionPromptAttachedFileName : 'No file attached';
+            }
+            if (sessionPromptDetachFileButton) {
+                sessionPromptDetachFileButton.disabled = !loaded;
+            }
+            persistSessionPromptAttachedFile();
+            updateSessionPromptIndicator();
+        }
+
+        function detachSessionPromptFile() {
+            setSessionPromptAttachedFile('', '');
+        }
+
+        async function loadSessionPromptFromFile(file) {
+            if (!file || !sessionPromptInput) {
+                return;
+            }
+
+            try {
+                const content = await file.text();
+                sessionPromptInput.value = content;
+                setSessionPromptAttachedFile(file.name, content);
+                sessionPromptDirty = true;
+                if (sessionPromptPanel) {
+                    sessionPromptPanel.open = true;
+                }
+                updateSessionPromptState('Loaded prompt from file "' + file.name + '". Click Apply to activate.', false);
+            } catch (error) {
+                updateSessionPromptState('Failed to load prompt file: ' + error.message, true);
+                detachSessionPromptFile();
+            } finally {
+                if (sessionPromptFileInput) {
+                    sessionPromptFileInput.value = '';
+                }
+            }
         }
 
         async function saveSessionPrompt(prompt) {
@@ -783,14 +1020,27 @@ const htmlTemplate = `<!DOCTYPE html>
                 return;
             }
 
-            const prompt = sessionPromptInput.value.trim();
+            const promptRaw = sessionPromptInput.value;
+            const prompt = promptRaw.trim();
+            const normalizedPrompt = normalizePromptText(promptRaw);
+            const shouldDetachFile = !!sessionPromptAttachedFileName && normalizedPrompt !== '' && normalizedPrompt !== normalizePromptText(sessionPromptAttachedFilePrompt);
+            if (shouldDetachFile) {
+                detachSessionPromptFile();
+            }
+
             sessionPromptApplyButton.disabled = true;
             sessionPromptClearButton.disabled = true;
 
             try {
                 await saveSessionPrompt(prompt);
                 sessionPromptDirty = false;
-                updateSessionPromptState(prompt ? 'Session prompt saved and active.' : 'Session prompt is not set.', false);
+                sessionPromptActiveOnServer = prompt !== '';
+                updateSessionPromptIndicator();
+                let statusMessage = prompt ? 'Session prompt saved and active.' : 'Session prompt is not set.';
+                if (shouldDetachFile) {
+                    statusMessage += ' Attached prompt file was detached after edits.';
+                }
+                updateSessionPromptState(statusMessage, false);
                 await loadStatus();
             } catch (error) {
                 updateSessionPromptState('Failed to save session prompt: ' + error.message, true);
@@ -949,9 +1199,47 @@ const htmlTemplate = `<!DOCTYPE html>
             flushText();
         }
 
+        function splitFileAnalysisSections(content) {
+            const lines = String(content || '').split('\n');
+            const sections = [];
+            const preamble = [];
+            let activeSection = null;
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const match = line.match(/^===\s*(.+?)\s*===\s*$/);
+
+                if (match) {
+                    if (activeSection) {
+                        sections.push(activeSection);
+                    }
+                    activeSection = {
+                        name: match[1],
+                        lines: [],
+                    };
+                    continue;
+                }
+
+                if (activeSection) {
+                    activeSection.lines.push(line);
+                } else {
+                    preamble.push(line);
+                }
+            }
+
+            if (activeSection) {
+                sections.push(activeSection);
+            }
+
+            return {
+                preamble: preamble.join('\n'),
+                sections: sections,
+            };
+        }
+
         // Render message content, turning [reasoning]...[/reasoning] blocks into
         // collapsible <details> elements and rendering markdown tables in answer text.
-        function renderContent(content, container) {
+        function renderReasoningAndMarkdown(content, container) {
             const re = /\[reasoning\]([\s\S]*?)\[\/reasoning\]\n?/g;
             let lastIndex = 0;
             let match;
@@ -980,8 +1268,50 @@ const htmlTemplate = `<!DOCTYPE html>
             }
         }
 
+        // Render assistant message content with per-file grouping for responses that
+        // use "=== file ===" separators.
+        function renderContent(content, container) {
+            const parsed = splitFileAnalysisSections(content);
+
+            if (!parsed.sections.length) {
+                renderReasoningAndMarkdown(content, container);
+                return;
+            }
+
+            if (parsed.preamble.trim()) {
+                renderReasoningAndMarkdown(parsed.preamble, container);
+            }
+
+            for (let i = 0; i < parsed.sections.length; i++) {
+                const section = parsed.sections[i];
+                const details = document.createElement('details');
+                details.className = 'file-analysis-block';
+                details.open = true;
+
+                const summary = document.createElement('summary');
+                summary.textContent = '\uD83D\uDCC4 ' + section.name;
+
+                const body = document.createElement('div');
+                body.className = 'file-analysis-content';
+
+                const sectionText = section.lines.join('\n');
+                if (sectionText.trim()) {
+                    renderReasoningAndMarkdown(sectionText, body);
+                } else {
+                    const empty = document.createElement('div');
+                    empty.className = 'message-text';
+                    empty.textContent = 'No content returned for this file.';
+                    body.appendChild(empty);
+                }
+
+                details.appendChild(summary);
+                details.appendChild(body);
+                container.appendChild(details);
+            }
+        }
+
         // Add message to chat
-        function addMessage(role, content, timestamp) {
+        function addMessage(role, content, timestamp, reviewSummary) {
             // Wrapper keeps bubble + timestamp together
             const wrapper = document.createElement('div');
             wrapper.style.cssText = 'display:flex;flex-direction:column;' + (role === 'user' ? 'align-items:flex-end;' : 'align-items:flex-start;');
@@ -1030,7 +1360,14 @@ const htmlTemplate = `<!DOCTYPE html>
             // Timestamp sits below bubble, outside it
             const timeDiv = document.createElement('div');
             timeDiv.className = 'message-timestamp';
-            timeDiv.textContent = new Date(timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+            const timeStr = new Date(timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+            if (reviewSummary) {
+                timeDiv.innerHTML = timeStr +
+                    ' &nbsp;<span style="color:var(--text-label);" title="Wall time: total real-world time from send to answer.&#10;LLM time: sum of all per-file LLM durations (exceeds wall time when files run concurrently).">' +
+                    reviewSummary + '</span>';
+            } else {
+                timeDiv.textContent = timeStr;
+            }
 
             wrapper.appendChild(messageDiv);
             wrapper.appendChild(timeDiv);
@@ -1056,19 +1393,47 @@ const htmlTemplate = `<!DOCTYPE html>
             scrollToBottom();
         }
 
-        const _activeFiles = new Set();
+        const _activeFiles = new Map(); // name -> start timestamp (ms)
+        const _doneFiles = new Map();   // name -> elapsed string
+
+        function _buildReviewSummary() {
+            const count = _doneFiles.size;
+            if (count === 0) return null;
+            const wallSec = (Date.now() - _runStartTime) / 1000;
+            let sumSec = 0;
+            _doneFiles.forEach(function(elapsed) {
+                sumSec += parseFloat(elapsed) || 0;
+            });
+            function fmtDur(sec) {
+                if (sec < 60) return sec.toFixed(1) + 's';
+                const m = Math.floor(sec / 60);
+                const s = Math.round(sec % 60);
+                return m + 'm ' + s + 's';
+            }
+            return '\u2713 ' + count + ' file' + (count > 1 ? 's' : '') +
+                ' reviewed \u00b7 ' + fmtDur(wallSec) + ' wall \u00b7 ' +
+                fmtDur(sumSec) + ' LLM';
+        }
 
         function _renderActiveList() {
             const ul = document.getElementById('activeFileList');
             if (!ul) return;
             ul.innerHTML = '';
-            _activeFiles.forEach(function(name) {
+            const now = Date.now();
+            _activeFiles.forEach(function(startMs, name) {
+                const elapsed = ((now - startMs) / 1000).toFixed(1);
                 const li = document.createElement('li');
                 li.style.cssText = 'font-size:0.78rem;color:var(--text-secondary);padding:0.1rem 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-                li.textContent = '\u2022 ' + name;
+                li.textContent = '\u23f3 ' + name + ' (' + elapsed + 's…)';
                 ul.appendChild(li);
             });
-            ul.style.display = _activeFiles.size > 0 ? 'block' : 'none';
+            _doneFiles.forEach(function(elapsed, name) {
+                const li = document.createElement('li');
+                li.style.cssText = 'font-size:0.78rem;color:var(--text-secondary);padding:0.1rem 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0.75;';
+                li.textContent = '\u2713 ' + name + ' (' + elapsed + ')';
+                ul.appendChild(li);
+            });
+            ul.style.display = (_activeFiles.size + _doneFiles.size) > 0 ? 'block' : 'none';
             scrollToBottom();
         }
 
@@ -1112,7 +1477,9 @@ const htmlTemplate = `<!DOCTYPE html>
             stopButton.disabled = false;
             messageInput.disabled = true;
             _activeFiles.clear();
+            _doneFiles.clear();
             _renderActiveList();
+            _runStartTime = Date.now();
 
             // Add user message
             addMessage('user', message, new Date().toISOString());
@@ -1130,14 +1497,24 @@ const htmlTemplate = `<!DOCTYPE html>
                     appendThinkLine(e.data.substring(6));
                 } else if (e.data.startsWith('ANALYZING:')) {
                     const name = e.data.substring(10);
-                    _activeFiles.add(name);
+                    _activeFiles.set(name, Date.now());
+                    _renderActiveList();
+                } else if (e.data.startsWith('DONE:')) {
+                    // "DONE:<name>:<elapsed>" — file finished, move to done list
+                    const rest = e.data.substring(5);
+                    const lastColon = rest.lastIndexOf(':');
+                    if (lastColon !== -1) {
+                        const name = rest.substring(0, lastColon);
+                        const elapsed = rest.substring(lastColon + 1);
+                        _activeFiles.delete(name);
+                        _doneFiles.set(name, elapsed);
+                    }
                     _renderActiveList();
                 } else if (e.data.startsWith('Reviewed ')) {
-                    // "Reviewed N/M: filename" — file done, remove from list
-                    const colon = e.data.indexOf(': ');
-                    if (colon !== -1) { _activeFiles.delete(e.data.substring(colon + 2)); }
+                    // "Reviewed N/M: filename" — update progress text (strip filename, it's already in the list)
                     _renderActiveList();
-                    updateLoadingText(e.data);
+                    const colonIdx = e.data.indexOf(': ');
+                    updateLoadingText(colonIdx !== -1 ? e.data.substring(0, colonIdx) : e.data);
                     scrollToBottom();
                 } else {
                     updateLoadingText(e.data);
@@ -1159,8 +1536,10 @@ const htmlTemplate = `<!DOCTYPE html>
                 evtSource.close();
                 hideLoading();
 
+                const reviewSummary = _buildReviewSummary();
+
                 if (data.success && data.message) {
-                    addMessage(data.message.role, data.message.content, data.message.timestamp);
+                    addMessage(data.message.role, data.message.content, data.message.timestamp, reviewSummary);
                     scrollToBottom();
                     
                     // Reload status in case focus or other settings changed
@@ -1184,6 +1563,7 @@ const htmlTemplate = `<!DOCTYPE html>
                 messageInput.disabled = false;
                 messageInput.focus();
                 _activeFiles.clear();
+                _doneFiles.clear();
                 _renderActiveList();
             }
         }
@@ -1282,6 +1662,28 @@ const htmlTemplate = `<!DOCTYPE html>
         // Event listeners
         sendButton.addEventListener('click', sendMessage);
         stopButton.addEventListener('click', stopProcessing);
+        if (sessionPromptLoadFileButton && sessionPromptFileInput) {
+            sessionPromptLoadFileButton.addEventListener('click', () => {
+                sessionPromptFileInput.click();
+            });
+            sessionPromptFileInput.addEventListener('change', (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (!file) {
+                    return;
+                }
+                loadSessionPromptFromFile(file);
+            });
+        }
+        if (sessionPromptDetachFileButton) {
+            sessionPromptDetachFileButton.addEventListener('click', () => {
+                if (!sessionPromptAttachedFileName) {
+                    return;
+                }
+                detachSessionPromptFile();
+                sessionPromptDirty = true;
+                updateSessionPromptState('Prompt file detached. Current prompt text is unchanged.', false);
+            });
+        }
         if (sessionPromptInput) {
             sessionPromptInput.addEventListener('input', () => {
                 sessionPromptDirty = true;
@@ -1301,12 +1703,17 @@ const htmlTemplate = `<!DOCTYPE html>
         });
 
         // Initialize
-        loadStatus();
-        loadMessages();
-        messageInput.focus();
+        restoreSessionPromptAttachedFile();
+        (async () => {
+            await loadMessages();
+            await loadStatus();
+            messageInput.focus();
+        })();
 
         // Auto-refresh status every 5 seconds
         setInterval(loadStatus, 5000);
+        // Fast poll while a run is in progress via reconnected view (refresh / other tab)
+        setInterval(function() { if (_processingViaPoll) loadStatus(); }, 2000);
     </script>
 </body>
 </html>
