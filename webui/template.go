@@ -933,7 +933,7 @@ const htmlTemplate = `<!DOCTYPE html>
                 const response = await fetch('/api/messages');
                 const messages = await response.json();
                 chatContainer.innerHTML = '';
-                messages.forEach(msg => addMessage(msg.role, msg.content, msg.timestamp));
+                messages.forEach(msg => addMessage(msg.role, msg.content, msg.timestamp, msg.reviewSummary || null));
                 scrollToBottom();
             } catch (error) {
                 console.error('Failed to load messages:', error);
@@ -1311,7 +1311,7 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         // Add message to chat
-        function addMessage(role, content, timestamp) {
+        function addMessage(role, content, timestamp, reviewSummary) {
             // Wrapper keeps bubble + timestamp together
             const wrapper = document.createElement('div');
             wrapper.style.cssText = 'display:flex;flex-direction:column;' + (role === 'user' ? 'align-items:flex-end;' : 'align-items:flex-start;');
@@ -1360,7 +1360,14 @@ const htmlTemplate = `<!DOCTYPE html>
             // Timestamp sits below bubble, outside it
             const timeDiv = document.createElement('div');
             timeDiv.className = 'message-timestamp';
-            timeDiv.textContent = new Date(timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+            const timeStr = new Date(timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+            if (reviewSummary) {
+                timeDiv.innerHTML = timeStr +
+                    ' &nbsp;<span style="color:var(--text-label);" title="Wall time: total real-world time from send to answer.&#10;LLM time: sum of all per-file LLM durations (exceeds wall time when files run concurrently).">' +
+                    reviewSummary + '</span>';
+            } else {
+                timeDiv.textContent = timeStr;
+            }
 
             wrapper.appendChild(messageDiv);
             wrapper.appendChild(timeDiv);
@@ -1389,9 +1396,9 @@ const htmlTemplate = `<!DOCTYPE html>
         const _activeFiles = new Map(); // name -> start timestamp (ms)
         const _doneFiles = new Map();   // name -> elapsed string
 
-        function _insertReviewSummary() {
+        function _buildReviewSummary() {
             const count = _doneFiles.size;
-            if (count === 0) return;
+            if (count === 0) return null;
             const wallSec = (Date.now() - _runStartTime) / 1000;
             let sumSec = 0;
             _doneFiles.forEach(function(elapsed) {
@@ -1403,19 +1410,9 @@ const htmlTemplate = `<!DOCTYPE html>
                 const s = Math.round(sec % 60);
                 return m + 'm ' + s + 's';
             }
-            const chip = document.createElement('div');
-            chip.style.cssText = [
-                'font-size:0.75rem',
-                'color:var(--text-label)',
-                'text-align:center',
-                'padding:0.25rem 0 0.5rem',
-                'user-select:none',
-            ].join(';');
-            chip.textContent = '\u2713 ' + count + ' file' + (count > 1 ? 's' : '') +
+            return '\u2713 ' + count + ' file' + (count > 1 ? 's' : '') +
                 ' reviewed \u00b7 ' + fmtDur(wallSec) + ' wall \u00b7 ' +
                 fmtDur(sumSec) + ' LLM';
-            chip.title = 'Wall time: total real-world time from send to answer.\nLLM time: sum of all per-file LLM durations (exceeds wall time when files run concurrently).';
-            chatContainer.appendChild(chip);
         }
 
         function _renderActiveList() {
@@ -1539,12 +1536,10 @@ const htmlTemplate = `<!DOCTYPE html>
                 evtSource.close();
                 hideLoading();
 
-                if (_doneFiles.size > 0) {
-                    _insertReviewSummary();
-                }
+                const reviewSummary = _buildReviewSummary();
 
                 if (data.success && data.message) {
-                    addMessage(data.message.role, data.message.content, data.message.timestamp);
+                    addMessage(data.message.role, data.message.content, data.message.timestamp, reviewSummary);
                     scrollToBottom();
                     
                     // Reload status in case focus or other settings changed

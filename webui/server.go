@@ -47,9 +47,10 @@ type Server struct {
 
 // Message represents a chat message
 type Message struct {
-	Role      string    `json:"role"`
-	Content   string    `json:"content"`
-	Timestamp time.Time `json:"timestamp"`
+	Role          string    `json:"role"`
+	Content       string    `json:"content"`
+	Timestamp     time.Time `json:"timestamp"`
+	ReviewSummary string    `json:"reviewSummary,omitempty"`
 }
 
 // ChatRequest represents an incoming chat message
@@ -320,9 +321,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg := Message{
-		Role:      "assistant",
-		Content:   analysisResp.Response,
-		Timestamp: time.Now(),
+		Role:          "assistant",
+		Content:       analysisResp.Response,
+		Timestamp:     time.Now(),
+		ReviewSummary: s.buildReviewSummary(analysisResp),
 	}
 
 	s.mu.Lock()
@@ -983,6 +985,41 @@ func (s *Server) buildQuestionWithSessionPrompt(question string) string {
 	}
 
 	return fmt.Sprintf("Session-level instructions (apply to this request):\n%s\n\nUser request:\n%s", sessionPrompt, question)
+}
+
+func (s *Server) buildReviewSummary(resp *types.AnalysisResponse) string {
+	s.progSnapMu.RLock()
+	count := len(s.progSnap.Done)
+	runStartMs := s.progSnap.RunStartMs
+	done := s.progSnap.Done
+	s.progSnapMu.RUnlock()
+
+	if count == 0 {
+		return ""
+	}
+
+	wallSec := float64(time.Now().UnixMilli()-runStartMs) / 1000
+	var sumSec float64
+	for _, elapsed := range done {
+		var v float64
+		fmt.Sscanf(elapsed, "%fs", &v)
+		sumSec += v
+	}
+
+	fmtDur := func(sec float64) string {
+		if sec < 60 {
+			return fmt.Sprintf("%.1fs", sec)
+		}
+		m := int(sec) / 60
+		s := int(sec) % 60
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+
+	noun := "file"
+	if count > 1 {
+		noun = "files"
+	}
+	return fmt.Sprintf("✓ %d %s reviewed · %s wall · %s LLM", count, noun, fmtDur(wallSec), fmtDur(sumSec))
 }
 
 func (s *Server) saveSession(question string, resp *types.AnalysisResponse) {
