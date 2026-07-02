@@ -920,7 +920,7 @@ const htmlTemplate = `<!DOCTYPE html>
                     _renderActiveList();
                     hideLoading();
                     await loadMessages();
-                    scrollToBottom();
+                    forceScrollToBottom();
                 }
             } catch (error) {
                 console.error('Failed to load status:', error);
@@ -934,7 +934,7 @@ const htmlTemplate = `<!DOCTYPE html>
                 const messages = await response.json();
                 chatContainer.innerHTML = '';
                 messages.forEach(msg => addMessage(msg.role, msg.content, msg.timestamp, msg.reviewSummary || null));
-                scrollToBottom();
+                forceScrollToBottom();
             } catch (error) {
                 console.error('Failed to load messages:', error);
             }
@@ -1434,7 +1434,6 @@ const htmlTemplate = `<!DOCTYPE html>
                 ul.appendChild(li);
             });
             ul.style.display = (_activeFiles.size + _doneFiles.size) > 0 ? 'block' : 'none';
-            scrollToBottom();
         }
 
         // Append a thinking line to the live reasoning preview
@@ -1462,8 +1461,18 @@ const htmlTemplate = `<!DOCTYPE html>
             }
         }
 
-        // Scroll to bottom
+        // Returns true when the user is close enough to the bottom that auto-scroll makes sense
+        function _nearBottom() {
+            return chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 80;
+        }
+
+        // Scroll to bottom (only when already near the bottom)
         function scrollToBottom() {
+            if (_nearBottom()) chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        // Unconditional scroll — use only when the user triggers an action (send, new chat)
+        function forceScrollToBottom() {
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
 
@@ -1484,7 +1493,7 @@ const htmlTemplate = `<!DOCTYPE html>
             // Add user message
             addMessage('user', message, new Date().toISOString());
             messageInput.value = '';
-            scrollToBottom();
+            forceScrollToBottom();
 
             showLoading();
 
@@ -1714,6 +1723,8 @@ const htmlTemplate = `<!DOCTYPE html>
         setInterval(loadStatus, 5000);
         // Fast poll while a run is in progress via reconnected view (refresh / other tab)
         setInterval(function() { if (_processingViaPoll) loadStatus(); }, 2000);
+        // Re-render active file list every second so elapsed seconds tick live
+        setInterval(function() { if (_activeFiles.size > 0) _renderActiveList(); }, 1000);
     </script>
 </body>
 </html>
