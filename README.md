@@ -132,7 +132,7 @@ ollama serve
 
 ## 📁 File Filtering
 
-Default filters in [config/config.go](config/config.go): supports common source files (`.go`, `.js`, `.py`, etc.), configs (`.yaml`, `.json`), and docs (`.pdf`, `.doc`, `.docx`, `.md`, `.txt`). Excludes `node_modules`, `.git`, `.env*`, build artifacts.
+Default filters in [config/config.go](config/config.go): supports common source files (`.go`, `.js`, `.py`, etc.), configs (`.yaml`, `.json`), and docs (`.pdf`, `.doc`, `.docx`, `.pptx`, `.md`, `.txt`). Excludes `node_modules`, `.git`, `.env*`, build artifacts.
 
 See [examples/](examples/) directory for sample configuration files:
 - [config.yaml](examples/config.yaml) - Full configuration example with comments
