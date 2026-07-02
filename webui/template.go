@@ -1438,6 +1438,8 @@ const htmlTemplate = `<!DOCTYPE html>
                 pdfBtn.addEventListener('click', () => {
                     const clone = contentDiv.cloneNode(true);
                     clone.querySelectorAll('.reasoning-block').forEach(el => el.remove());
+                    // Ensure all file-analysis sections are expanded for print
+                    clone.querySelectorAll('details').forEach(el => el.setAttribute('open', ''));
                     // Convert raw markdown in text blocks and table cells
                     clone.querySelectorAll('.message-text').forEach(el => {
                         el.innerHTML = mdToHtml(el.textContent);
@@ -1472,7 +1474,8 @@ const htmlTemplate = `<!DOCTYPE html>
                         'a{color:#007aff;}' +
                         '.message-content{display:flex;flex-direction:column;gap:0.55rem;}' +
                         '.message-text{white-space:normal;word-break:break-word;line-height:1.55;}' +
-                        '.file-analysis-block{border:1px solid #d1d1d6;border-radius:11px;overflow:hidden;margin:4px 0;}' +
+                        '.file-analysis-block{border:1px solid #d1d1d6;border-radius:11px;overflow:hidden;margin:4px 0;break-before:page;page-break-before:always;}' +
+                        '.file-analysis-block:first-of-type{break-before:auto;page-break-before:auto;}' +
                         '.file-analysis-block summary{padding:0.5rem 0.7rem;font-size:0.84rem;font-weight:600;background:#e5e5ea;color:#1c1c1e;cursor:pointer;}' +
                         '.file-analysis-content{padding:0.62rem 0.7rem;display:flex;flex-direction:column;gap:0.5rem;}' +
                         '.md-table-wrap{overflow-x:auto;border:1px solid #d1d1d6;border-radius:10px;}' +
