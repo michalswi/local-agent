@@ -134,6 +134,7 @@ func DefaultConfig() *Config {
 				"*.docx",
 				"*.pcap",
 				"*.pcapng",
+				"*.pptx",
 			},
 		},
 		Security: SecurityConfig{
