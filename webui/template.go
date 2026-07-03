@@ -920,7 +920,7 @@ const htmlTemplate = `<!DOCTYPE html>
                     _renderActiveList();
                     hideLoading();
                     await loadMessages();
-                    scrollToBottom();
+                    forceScrollToBottom();
                 }
             } catch (error) {
                 console.error('Failed to load status:', error);
@@ -934,7 +934,7 @@ const htmlTemplate = `<!DOCTYPE html>
                 const messages = await response.json();
                 chatContainer.innerHTML = '';
                 messages.forEach(msg => addMessage(msg.role, msg.content, msg.timestamp, msg.reviewSummary || null));
-                scrollToBottom();
+                forceScrollToBottom();
             } catch (error) {
                 console.error('Failed to load messages:', error);
             }
@@ -1059,6 +1059,83 @@ const htmlTemplate = `<!DOCTYPE html>
             sessionPromptDirty = true;
             await applySessionPrompt();
         }
+
+        // Converts a markdown string to HTML for the PDF print window.
+        // Handles: headings, bold, italic, inline code, code fences,
+        // unordered/ordered lists, horizontal rules, paragraphs.
+        (function() {
+            // backtick via charCode to avoid terminating Go raw string literal
+            const BT = String.fromCharCode(96);
+            const inlineCodeRe = new RegExp(BT + '([^' + BT + ']+)' + BT, 'g');
+            function esc(s) {
+                return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            }
+            // Exposed globally so PDF table-cell processing can reuse it
+            window.mdInline = function mdInline(s) {
+                s = esc(s);
+                s = s.replace(inlineCodeRe, '<code>$1</code>');
+                s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+                s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+                s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
+                s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+                s = s.replace(/_([^_]+)_/g, '<em>$1</em>');
+                s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+                return s;
+            };
+            window.mdToHtml = function mdToHtml(md) {
+            const lines = md.split('\n');
+            const out = [];
+            let i = 0;
+            while (i < lines.length) {
+                const raw = lines[i];
+                const t = raw.trim();
+                // code fence
+                if (t.startsWith('\u0060\u0060\u0060')) {
+                    const lang = t.slice(3).trim();
+                    const code = [];
+                    i++;
+                    while (i < lines.length && !lines[i].trim().startsWith('\u0060\u0060\u0060')) {
+                        code.push(esc(lines[i]));
+                        i++;
+                    }
+                    i++;
+                    out.push('<pre><code' + (lang ? ' class="language-' + esc(lang) + '"' : '') + '>' + code.join('\n') + '</code></pre>');
+                    continue;
+                }
+                // heading
+                const hm = t.match(/^(#{1,6})\s+(.+)$/);
+                if (hm) { const lv = hm[1].length; out.push('<h' + lv + '>' + mdInline(hm[2]) + '</h' + lv + '>'); i++; continue; }
+                // hr
+                if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)) { out.push('<hr>'); i++; continue; }
+                // unordered list — collect consecutive items
+                if (/^[-*+] /.test(t)) {
+                    out.push('<ul>');
+                    while (i < lines.length && /^[-*+] /.test(lines[i].trim())) {
+                        out.push('<li>' + mdInline(lines[i].trim().replace(/^[-*+] /, '')) + '</li>');
+                        i++;
+                    }
+                    out.push('</ul>');
+                    continue;
+                }
+                // ordered list
+                if (/^\d+\. /.test(t)) {
+                    out.push('<ol>');
+                    while (i < lines.length && /^\d+\. /.test(lines[i].trim())) {
+                        out.push('<li>' + mdInline(lines[i].trim().replace(/^\d+\. /, '')) + '</li>');
+                        i++;
+                    }
+                    out.push('</ol>');
+                    continue;
+                }
+                // blank line
+                if (!t) { out.push('<br>'); i++; continue; }
+                // paragraph
+                out.push('<p>' + mdInline(t) + '</p>');
+                i++;
+            }
+            return out.join('\n');
+        };
+        })();
 
         function splitMarkdownRow(line) {
             let text = line.trim();
@@ -1354,6 +1431,71 @@ const htmlTemplate = `<!DOCTYPE html>
                 });
 
                 actionsDiv.appendChild(copyBtn);
+
+                const pdfBtn = document.createElement('button');
+                pdfBtn.className = 'copy-btn';
+                pdfBtn.textContent = 'PDF';
+                pdfBtn.addEventListener('click', () => {
+                    const clone = contentDiv.cloneNode(true);
+                    clone.querySelectorAll('.reasoning-block').forEach(el => el.remove());
+                    // Ensure all file-analysis sections are expanded for print
+                    clone.querySelectorAll('details').forEach(el => el.setAttribute('open', ''));
+                    // Convert raw markdown in text blocks and table cells
+                    clone.querySelectorAll('.message-text').forEach(el => {
+                        el.innerHTML = mdToHtml(el.textContent);
+                    });
+                    clone.querySelectorAll('.md-table th, .md-table td').forEach(el => {
+                        el.innerHTML = mdInline(el.textContent);
+                    });
+
+                    const now = new Date();
+                    const pad = n => String(n).padStart(2, '0');
+                    const ts = '' + now.getFullYear() +
+                        pad(now.getMonth() + 1) +
+                        pad(now.getDate()) + '-' +
+                        pad(now.getHours()) +
+                        pad(now.getMinutes()) +
+                        pad(now.getSeconds());
+                    const filename = 'local-agent-' + ts;
+
+                    const win = window.open('', '_blank');
+                    win.document.write('<!DOCTYPE html><html><head>' +
+                        '<meta charset="UTF-8">' +
+                        '<title>' + filename + '</title>' +
+                        '<style>' +
+                        'body{margin:0;padding:24px 32px;background:#fff;color:#1c1c1e;' +
+                        'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;' +
+                        'font-size:14px;line-height:1.6;}' +
+                        'h1,h2,h3,h4,h5,h6{margin:1em 0 0.4em;line-height:1.3;font-weight:600;color:#1c1c1e;}' +
+                        'h1{font-size:1.6em;}h2{font-size:1.35em;}h3{font-size:1.15em;}' +
+                        'p{margin:0.3em 0;}br{display:block;margin:0.15em 0;}' +
+                        'ul,ol{margin:0.4em 0 0.4em 1.5em;padding:0;}li{margin:0.2em 0;}' +
+                        'hr{border:none;border-top:1px solid #d1d1d6;margin:1em 0;}' +
+                        'a{color:#007aff;}' +
+                        '.message-content{display:flex;flex-direction:column;gap:0.55rem;}' +
+                        '.message-text{white-space:normal;word-break:break-word;line-height:1.55;}' +
+                        '.file-analysis-block{border:1px solid #d1d1d6;border-radius:11px;overflow:hidden;margin:4px 0;break-before:page;page-break-before:always;}' +
+                        '.file-analysis-block:first-of-type{break-before:auto;page-break-before:auto;}' +
+                        '.file-analysis-block summary{padding:0.5rem 0.7rem;font-size:0.84rem;font-weight:600;background:#e5e5ea;color:#1c1c1e;cursor:pointer;}' +
+                        '.file-analysis-content{padding:0.62rem 0.7rem;display:flex;flex-direction:column;gap:0.5rem;}' +
+                        '.md-table-wrap{overflow-x:auto;border:1px solid #d1d1d6;border-radius:10px;}' +
+                        '.md-table{width:100%;border-collapse:collapse;font-size:0.875rem;}' +
+                        '.md-table th,.md-table td{border-bottom:1px solid #d1d1d6;border-right:1px solid #d1d1d6;text-align:left;vertical-align:top;padding:0.5rem 0.7rem;word-break:break-word;}' +
+                        '.md-table th:last-child,.md-table td:last-child{border-right:none;}' +
+                        '.md-table thead th{background:#e5e5ea;font-weight:600;}' +
+                        '.md-table tbody tr:last-child td{border-bottom:none;}' +
+                        'pre{background:#f2f2f7;border-radius:8px;padding:12px;white-space:pre-wrap;word-break:break-word;margin:0.4em 0;}' +
+                        'code{background:#f2f2f7;border-radius:4px;padding:1px 5px;font-family:ui-monospace,"SF Mono",monospace;font-size:0.88em;}' +
+                        'pre code{background:none;padding:0;font-size:0.85em;}' +
+                        'strong{font-weight:700;}em{font-style:italic;}' +
+                        '@media print{body{padding:0;}}' +
+                        '</style></head><body>' + clone.outerHTML + '</body></html>');
+                    win.document.close();
+                    win.focus();
+                    setTimeout(() => { win.print(); }, 400);
+                });
+                actionsDiv.appendChild(pdfBtn);
+
                 messageDiv.appendChild(actionsDiv);
             }
 
@@ -1434,7 +1576,6 @@ const htmlTemplate = `<!DOCTYPE html>
                 ul.appendChild(li);
             });
             ul.style.display = (_activeFiles.size + _doneFiles.size) > 0 ? 'block' : 'none';
-            scrollToBottom();
         }
 
         // Append a thinking line to the live reasoning preview
@@ -1462,8 +1603,18 @@ const htmlTemplate = `<!DOCTYPE html>
             }
         }
 
-        // Scroll to bottom
+        // Returns true when the user is close enough to the bottom that auto-scroll makes sense
+        function _nearBottom() {
+            return chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 80;
+        }
+
+        // Scroll to bottom (only when already near the bottom)
         function scrollToBottom() {
+            if (_nearBottom()) chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        // Unconditional scroll — use only when the user triggers an action (send, new chat)
+        function forceScrollToBottom() {
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
 
@@ -1484,7 +1635,7 @@ const htmlTemplate = `<!DOCTYPE html>
             // Add user message
             addMessage('user', message, new Date().toISOString());
             messageInput.value = '';
-            scrollToBottom();
+            forceScrollToBottom();
 
             showLoading();
 
@@ -1714,6 +1865,8 @@ const htmlTemplate = `<!DOCTYPE html>
         setInterval(loadStatus, 5000);
         // Fast poll while a run is in progress via reconnected view (refresh / other tab)
         setInterval(function() { if (_processingViaPoll) loadStatus(); }, 2000);
+        // Re-render active file list every second so elapsed seconds tick live
+        setInterval(function() { if (_activeFiles.size > 0) _renderActiveList(); }, 1000);
     </script>
 </body>
 </html>

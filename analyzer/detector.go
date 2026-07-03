@@ -65,7 +65,7 @@ func (d *Detector) DetectFile(path string) (*types.FileInfo, error) {
 	}
 
 	fileInfo.Type = fileType
-	fileInfo.IsReadable = (fileType == types.TypeText || fileType == types.TypePDF || fileType == types.TypeDOC || fileType == types.TypeDOCX || fileType == types.TypePCAP)
+	fileInfo.IsReadable = (fileType == types.TypeText || fileType == types.TypePDF || fileType == types.TypeDOC || fileType == types.TypeDOCX || fileType == types.TypePPTX || fileType == types.TypePCAP)
 
 	return fileInfo, nil
 }
@@ -133,6 +133,11 @@ func (d *Detector) detectFileType(path, ext string) (types.FileType, error) {
 	// Check for DOCX files
 	if ext == ".docx" {
 		return types.TypeDOCX, nil
+	}
+
+	// Check for PPTX files
+	if ext == ".pptx" {
+		return types.TypePPTX, nil
 	}
 
 	// Check for PCAP files
@@ -329,6 +334,119 @@ func extractDOCXText(r io.Reader) (string, error) {
 			}
 
 		case xml.EndElement:
+			if strings.ToLower(t.Name.Local) == "p" {
+				appendNewline()
+			}
+		}
+	}
+
+	return strings.TrimSpace(builder.String()), nil
+}
+
+// ReadPPTXContent extracts text from a PPTX file.
+// PPTX is a ZIP archive; slide text lives in ppt/slides/slide*.xml as <a:t> elements.
+func (d *Detector) ReadPPTXContent(path string) (string, error) {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to open PPTX: %w", err)
+	}
+	defer reader.Close()
+
+	var parts []string
+	for _, file := range reader.File {
+		name := strings.ToLower(file.Name)
+		if strings.HasPrefix(name, "ppt/slides/slide") && strings.HasSuffix(name, ".xml") {
+			parts = append(parts, file.Name)
+		}
+	}
+
+	if len(parts) == 0 {
+		return "", fmt.Errorf("no slide XML parts found in PPTX")
+	}
+
+	sort.Strings(parts)
+
+	var content strings.Builder
+	for _, partName := range parts {
+		var partFile *zip.File
+		for _, file := range reader.File {
+			if file.Name == partName {
+				partFile = file
+				break
+			}
+		}
+		if partFile == nil {
+			continue
+		}
+
+		rc, err := partFile.Open()
+		if err != nil {
+			return "", fmt.Errorf("failed to open PPTX part %s: %w", partName, err)
+		}
+
+		slideText, parseErr := extractPPTXSlideText(rc)
+		closeErr := rc.Close()
+		if parseErr != nil {
+			return "", fmt.Errorf("failed to parse PPTX part %s: %w", partName, parseErr)
+		}
+		if closeErr != nil {
+			return "", fmt.Errorf("failed to close PPTX part %s: %w", partName, closeErr)
+		}
+
+		slideText = strings.TrimSpace(slideText)
+		if slideText == "" {
+			continue
+		}
+
+		if content.Len() > 0 {
+			content.WriteString("\n\n")
+		}
+		content.WriteString(slideText)
+	}
+
+	finalText := strings.TrimSpace(content.String())
+	if finalText == "" {
+		return "", fmt.Errorf("no text content extracted from PPTX")
+	}
+
+	return finalText, nil
+}
+
+func extractPPTXSlideText(r io.Reader) (string, error) {
+	decoder := xml.NewDecoder(r)
+	var builder strings.Builder
+	lastWasNewline := true
+
+	appendNewline := func() {
+		if !lastWasNewline {
+			builder.WriteString("\n")
+			lastWasNewline = true
+		}
+	}
+
+	for {
+		tok, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if strings.ToLower(t.Name.Local) == "t" {
+				var text string
+				if err := decoder.DecodeElement(&text, &t); err != nil {
+					return "", err
+				}
+				if text != "" {
+					builder.WriteString(text)
+					lastWasNewline = false
+				}
+			}
+		case xml.EndElement:
+			// <a:p> ends a paragraph
 			if strings.ToLower(t.Name.Local) == "p" {
 				appendNewline()
 			}

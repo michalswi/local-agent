@@ -41,6 +41,7 @@ const (
 	TypePDF       FileType = "pdf"
 	TypeDOC       FileType = "doc"
 	TypeDOCX      FileType = "docx"
+	TypePPTX      FileType = "pptx"
 	TypePCAP      FileType = "pcap"
 	TypeUnknown   FileType = "unknown"
 	TypeSensitive FileType = "sensitive"

@@ -29,6 +29,8 @@ func (a *Analyzer) readContentByType(path string, fileType types.FileType) (stri
 		return a.detector.ReadDOCContent(path)
 	case types.TypeDOCX:
 		return a.detector.ReadDOCXContent(path)
+	case types.TypePPTX:
+		return a.detector.ReadPPTXContent(path)
 	case types.TypePCAP:
 		return a.detector.ReadPCAPContent(path)
 	default:
