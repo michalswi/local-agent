@@ -51,11 +51,18 @@ build-macos:
 	@ls -lh $(MACOS_DIR)
 
 ## build-linux: Build binaries for Linux
+# build-linux:
+# 	@echo "Building for Linux..."
+# 	@mkdir -p $(LINUX_DIR)
+# 	@echo "  - Building Linux ARM64..."
+# 	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(LINUX_DIR)/$(BINARY_NAME)-linux-arm64 .
+# 	@echo "Linux builds complete:"
+# 	@ls -lh $(LINUX_DIR)
 build-linux:
 	@echo "Building for Linux..."
 	@mkdir -p $(LINUX_DIR)
-	@echo "  - Building Linux ARM64..."
-	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(LINUX_DIR)/$(BINARY_NAME)-linux-arm64 .
+	@echo "  - Building Linux x86_64..."
+	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(LINUX_DIR)/$(BINARY_NAME)-linux-amd64 .
 	@echo "Linux builds complete:"
 	@ls -lh $(LINUX_DIR)
 
