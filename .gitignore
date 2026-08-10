@@ -43,3 +43,8 @@ config.local.yaml
 # Build artifacts
 dist/
 build/
+
+# self-signed certificates
+*.crt
+*.key
+*.pem

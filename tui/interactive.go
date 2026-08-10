@@ -38,6 +38,7 @@ type InteractiveModel struct {
 	cfg         *config.Config
 	llmClient   *llm.OllamaClient
 	uiPort      int
+	uiHTTPS     bool
 
 	// UI state
 	width     int
@@ -72,18 +73,23 @@ type rescanCompleteMsg struct {
 }
 
 // NewInteractiveModel creates a new interactive mode model
-func NewInteractiveModel(directory, model, endpoint string, scanResult *types.ScanResult, cfg *config.Config, llmClient *llm.OllamaClient, focusedPath string, uiPort int) InteractiveModel {
+func NewInteractiveModel(directory, model, endpoint string, scanResult *types.ScanResult, cfg *config.Config, llmClient *llm.OllamaClient, focusedPath string, uiPort int, uiHTTPS bool) InteractiveModel {
 	ti := textinput.New()
 	ti.Placeholder = "Ask a question about your codebase..."
 	ti.Focus()
 	ti.CharLimit = 500
 	ti.Width = 80
 
+	scheme := "http"
+	if uiHTTPS {
+		scheme = "https"
+	}
+
 	// Add welcome message
 	welcome := Message{
 		Role: "assistant",
-		Content: fmt.Sprintf("🤖 Interactive mode started!\n\nScanned: %s\nFiles found: %d\nModel: %s\n\n🔧 Configuration:\n   Token Limit: %d\n   Concurrent Files: %d\n   Temperature: %.2f\n\n🌐 Web UI: http://localhost:%d\n\nType your questions or commands. Type 'help' for available commands, 'quit' or 'exit' to leave.",
-			directory, scanResult.TotalFiles, model, cfg.Agent.TokenLimit, cfg.Agent.ConcurrentFiles, cfg.LLM.Temperature, uiPort),
+		Content: fmt.Sprintf("🤖 Interactive mode started!\n\nScanned: %s\nFiles found: %d\nModel: %s\n\n🔧 Configuration:\n   Token Limit: %d\n   Concurrent Files: %d\n   Temperature: %.2f\n\n🌐 Web UI: %s://localhost:%d\n\nType your questions or commands. Type 'help' for available commands, 'quit' or 'exit' to leave.",
+			directory, scanResult.TotalFiles, model, cfg.Agent.TokenLimit, cfg.Agent.ConcurrentFiles, cfg.LLM.Temperature, scheme, uiPort),
 		Timestamp: time.Now(),
 	}
 
@@ -98,6 +104,7 @@ func NewInteractiveModel(directory, model, endpoint string, scanResult *types.Sc
 		cfg:         cfg,
 		llmClient:   llmClient,
 		uiPort:      uiPort,
+		uiHTTPS:     uiHTTPS,
 	}
 }
 
