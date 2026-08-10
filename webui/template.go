@@ -1505,7 +1505,7 @@ const htmlTemplate = `<!DOCTYPE html>
             const timeStr = new Date(timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
             if (reviewSummary) {
                 timeDiv.innerHTML = timeStr +
-                    ' &nbsp;<span style="color:var(--text-label);" title="Wall time: total real-world time from send to answer.&#10;LLM time: sum of all per-file LLM durations (exceeds wall time when files run concurrently).">' +
+                    ' &nbsp;<span style="color:var(--text-label);" title="Wall time: total real-world time from send to answer (drops with concurrency).&#10;LLM time: sum of each file&#39;s individual LLM duration, fixed regardless of concurrency.">' +
                     reviewSummary + '</span>';
             } else {
                 timeDiv.textContent = timeStr;
