@@ -597,6 +597,7 @@ const htmlTemplate = `<!DOCTYPE html>
         .message-actions {
             display: flex;
             justify-content: flex-end;
+            gap: 0.4rem;
             margin-top: 0.4rem;
         }
 
@@ -735,7 +736,7 @@ const htmlTemplate = `<!DOCTYPE html>
             <input
                 type="text"
                 id="messageInput"
-                placeholder="Ask about your codebase…"
+                placeholder="Ask about…"
                 autocomplete="off"
             />
             <button id="sendButton">Send</button>
@@ -879,6 +880,7 @@ const htmlTemplate = `<!DOCTYPE html>
                         sendButton.disabled = true;
                         stopButton.disabled = false;
                         messageInput.disabled = true;
+                        dirButton.disabled = true;
                         if (!document.getElementById('loading')) {
                             showLoading();
                         }
@@ -914,6 +916,7 @@ const htmlTemplate = `<!DOCTYPE html>
                     stopButton.disabled = true;
                     stopButton.textContent = 'Stop';
                     messageInput.disabled = false;
+                    dirButton.disabled = false;
                     _activeFiles.clear();
                     _doneFiles.clear();
                     _runStartTime = 0;
@@ -1415,6 +1418,16 @@ const htmlTemplate = `<!DOCTYPE html>
                 const actionsDiv = document.createElement('div');
                 actionsDiv.className = 'message-actions';
 
+                const collapseBtn = document.createElement('button');
+                collapseBtn.className = 'copy-btn';
+                collapseBtn.textContent = 'Collapse';
+                collapseBtn.addEventListener('click', () => {
+                    const collapsed = contentDiv.style.display !== 'none';
+                    contentDiv.style.display = collapsed ? 'none' : '';
+                    collapseBtn.textContent = collapsed ? 'Expand' : 'Collapse';
+                });
+                actionsDiv.appendChild(collapseBtn);
+
                 const copyBtn = document.createElement('button');
                 copyBtn.className = 'copy-btn';
                 copyBtn.textContent = 'Copy';
@@ -1627,6 +1640,7 @@ const htmlTemplate = `<!DOCTYPE html>
             sendButton.disabled = true;
             stopButton.disabled = false;
             messageInput.disabled = true;
+            dirButton.disabled = true;
             _activeFiles.clear();
             _doneFiles.clear();
             _renderActiveList();
@@ -1712,6 +1726,7 @@ const htmlTemplate = `<!DOCTYPE html>
                 stopButton.disabled = true;
                 stopButton.textContent = 'Stop';
                 messageInput.disabled = false;
+                dirButton.disabled = false;
                 messageInput.focus();
                 _activeFiles.clear();
                 _doneFiles.clear();
