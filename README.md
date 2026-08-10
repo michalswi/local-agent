@@ -16,7 +16,7 @@
 ## ✨ Features
 
 - 🔍 Smart file scanning
-- 💬 Interactive mode (terminal UI + web UI at localhost:5050) with live rescan capability
+- 💬 Interactive mode (terminal UI + web UI at localhost:5050, configurable via `--ui-port`) with live rescan capability
 - ⚡ Concurrent batch processing for large projects
 - 🔒 Privacy-first - all processing happens locally
 - 🌐 Remote Ollama support via `--host` flag (e.g., `--host 192.168.1.100:11434`)
@@ -41,6 +41,9 @@ make build
 
 # Connect to remote Ollama instance
 ./local-agent -dir ./myproject --host 192.168.1.100:11434 --interactive
+
+# Use a custom Web UI port (default is 5050)
+./local-agent -dir ./myproject --interactive --ui-port 8080
 
 # Other commands
 ./local-agent --health         # Check LLM connection
@@ -81,7 +84,7 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 ./local-agent -dir <full_path_to_dir> --interactive
 ```
 
-**Web UI:** Opens automatically at http://localhost:5050 — see [API.md](API.md) for the full REST API reference.
+**Web UI:** Opens automatically at http://localhost:5050 by default — use `--ui-port <port>` to change it — see [API.md](API.md) for the full REST API reference.
 
 **Commands:** `help`, `model <name>`, `rescan`, `stats`, `files`, `focus <path>`, `clear`, `quit`
 

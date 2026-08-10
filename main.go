@@ -31,6 +31,7 @@ func main() {
 		focusFile       = flag.String("focus", "", "Analyze only this file (relative to --dir; if outside, directory adjusts automatically)")
 		model           = flag.String("model", "", "LLM model to use (overrides config)")
 		host            = flag.String("host", "localhost:11434", "Ollama instance host (e.g., localhost:11434, 192.168.1.100:8080, or ollama.example.com:11434)")
+		uiPort          = flag.Int("ui-port", 5050, "Web UI port for interactive mode")
 		dryRun          = flag.Bool("dry-run", false, "List files without analyzing")
 		noDetectSecrets = flag.Bool("no-detect-secrets", false, "Disable secret/sensitive content detection")
 
@@ -124,7 +125,7 @@ func main() {
 	// If interactive mode requested, start the interactive session
 	if *interactive {
 		ensureLLMAvailable(llmClient)
-		startInteractiveMode(absDir, cfg, llmClient, focusRel)
+		startInteractiveMode(absDir, cfg, llmClient, focusRel, *uiPort)
 		return
 	}
 
@@ -810,7 +811,7 @@ func displayAnalysisSummary(result *types.AnalysisResponse) {
 	}
 }
 
-func startInteractiveMode(directory string, cfg *config.Config, llmClient *llm.OllamaClient, focusRel string) {
+func startInteractiveMode(directory string, cfg *config.Config, llmClient *llm.OllamaClient, focusRel string, uiPort int) {
 	// Perform initial scan silently
 	scanResult, err := scanDirectory(directory, cfg)
 	if err != nil {
@@ -826,13 +827,13 @@ func startInteractiveMode(directory string, cfg *config.Config, llmClient *llm.O
 	// Start web server in a goroutine
 	webServer := webui.NewServer(directory, cfg.LLM.Model, cfg.LLM.Endpoint, scanResult, cfg, llmClient, focusRel)
 	go func() {
-		if err := webServer.Start(5050); err != nil {
+		if err := webServer.Start(uiPort); err != nil {
 			fmt.Fprintf(os.Stderr, "Web server error: %v\n", err)
 		}
 	}()
 
 	// Start interactive TUI
-	m := tui.NewInteractiveModel(directory, cfg.LLM.Model, cfg.LLM.Endpoint, scanResult, cfg, llmClient, focusRel)
+	m := tui.NewInteractiveModel(directory, cfg.LLM.Model, cfg.LLM.Endpoint, scanResult, cfg, llmClient, focusRel, uiPort)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

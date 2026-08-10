@@ -37,6 +37,7 @@ type InteractiveModel struct {
 	focusedPath string
 	cfg         *config.Config
 	llmClient   *llm.OllamaClient
+	uiPort      int
 
 	// UI state
 	width     int
@@ -71,7 +72,7 @@ type rescanCompleteMsg struct {
 }
 
 // NewInteractiveModel creates a new interactive mode model
-func NewInteractiveModel(directory, model, endpoint string, scanResult *types.ScanResult, cfg *config.Config, llmClient *llm.OllamaClient, focusedPath string) InteractiveModel {
+func NewInteractiveModel(directory, model, endpoint string, scanResult *types.ScanResult, cfg *config.Config, llmClient *llm.OllamaClient, focusedPath string, uiPort int) InteractiveModel {
 	ti := textinput.New()
 	ti.Placeholder = "Ask a question about your codebase..."
 	ti.Focus()
@@ -81,8 +82,8 @@ func NewInteractiveModel(directory, model, endpoint string, scanResult *types.Sc
 	// Add welcome message
 	welcome := Message{
 		Role: "assistant",
-		Content: fmt.Sprintf("🤖 Interactive mode started!\n\nScanned: %s\nFiles found: %d\nModel: %s\n\n🔧 Configuration:\n   Token Limit: %d\n   Concurrent Files: %d\n   Temperature: %.2f\n\n🌐 Web UI: http://localhost:5050\n\nType your questions or commands. Type 'help' for available commands, 'quit' or 'exit' to leave.",
-			directory, scanResult.TotalFiles, model, cfg.Agent.TokenLimit, cfg.Agent.ConcurrentFiles, cfg.LLM.Temperature),
+		Content: fmt.Sprintf("🤖 Interactive mode started!\n\nScanned: %s\nFiles found: %d\nModel: %s\n\n🔧 Configuration:\n   Token Limit: %d\n   Concurrent Files: %d\n   Temperature: %.2f\n\n🌐 Web UI: http://localhost:%d\n\nType your questions or commands. Type 'help' for available commands, 'quit' or 'exit' to leave.",
+			directory, scanResult.TotalFiles, model, cfg.Agent.TokenLimit, cfg.Agent.ConcurrentFiles, cfg.LLM.Temperature, uiPort),
 		Timestamp: time.Now(),
 	}
 
@@ -96,6 +97,7 @@ func NewInteractiveModel(directory, model, endpoint string, scanResult *types.Sc
 		focusedPath: focusedPath,
 		cfg:         cfg,
 		llmClient:   llmClient,
+		uiPort:      uiPort,
 	}
 }
 
