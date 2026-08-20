@@ -16,7 +16,8 @@
 ## ✨ Features
 
 - 🔍 Smart file scanning
-- 💬 Interactive mode (terminal UI + web UI at localhost:5050) with live rescan capability
+- 💬 Interactive mode (terminal UI + web UI at localhost:5050, configurable via `--ui-port`) with live rescan capability
+- 🔒 Optional HTTPS for the Web UI via `--https <cert.pem>`
 - ⚡ Concurrent batch processing for large projects
 - 🔒 Privacy-first - all processing happens locally
 - 🌐 Remote Ollama support via `--host` flag (e.g., `--host 192.168.1.100:11434`)
@@ -41,6 +42,12 @@ make build
 
 # Connect to remote Ollama instance
 ./local-agent -dir ./myproject --host 192.168.1.100:11434 --interactive
+
+# Use a custom Web UI port (default is 5050)
+./local-agent -dir ./myproject --interactive --ui-port 8080
+
+# Serve the Web UI over HTTPS (cert.pem must contain both certificate and private key)
+./local-agent -dir ./myproject --interactive --https ./cert.pem
 
 # Other commands
 ./local-agent --health         # Check LLM connection
@@ -81,7 +88,7 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 ./local-agent -dir <full_path_to_dir> --interactive
 ```
 
-**Web UI:** Opens automatically at http://localhost:5050 — see [API.md](API.md) for the full REST API reference.
+**Web UI:** Opens automatically at http://localhost:5050 by default — use `--ui-port <port>` to change it, or `--https <cert.pem>` to serve it over HTTPS instead (the PEM file must contain both the certificate and private key) — see [API.md](API.md) for the full REST API reference.
 
 **Commands:** `help`, `model <name>`, `rescan`, `stats`, `files`, `focus <path>`, `clear`, `quit`
 
@@ -92,8 +99,8 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 **Session Prompt:** In Web UI, open the collapsible **Session Prompt** panel to add optional instructions applied to every request in the current interactive session. Use **Apply** to enable or **Clear** to disable; it is not persisted after the session ends.
 
 **Review summary (Web UI):** After every multi-file analysis a summary line appears in the chat, e.g. `✓ 4 files reviewed · 4m 18s wall · 8m 53s LLM`. Hover it for details.
-- **Wall time** — real-world elapsed time from when you pressed Send until the answer arrived.
-- **LLM time** — sum of individual per-file LLM durations. With concurrent processing this exceeds wall time (e.g. 4 files running in parallel each taking 2 min = 8 min LLM but ~2 min wall).
+- **Wall time** — real-world elapsed time from when you pressed Send until the answer arrived. This drops when files are processed concurrently.
+- **LLM time** — sum of each file's individual LLM duration, added up regardless of whether files ran sequentially or in parallel. It reflects total model compute, not clock time, so it doesn't shrink with concurrency (e.g. 4 files running in parallel, each taking 2 min, still add up to 8 min LLM time even though wall time is only ~2 min).
 
 **Dir button:** In Web UI, click **Dir** (next to Stop) to change the working directory at runtime — overrides the `--dir` flag. The directory is rescanned immediately and the file count updates in the header.
 

@@ -118,8 +118,10 @@ func NewServer(directory, model, endpoint string, scanResult *types.ScanResult, 
 	return s
 }
 
-// Start starts the web server
-func (s *Server) Start(port int) error {
+// Start starts the web server. If httpsCertFile is non-empty, it must point to a
+// PEM file containing both the certificate and private key, and the server is
+// exposed over HTTPS; otherwise it serves plain HTTP.
+func (s *Server) Start(port int, httpsCertFile string) error {
 	// Serve embedded static files
 	staticFS, err := fs.Sub(StaticFiles, "webstatic")
 	if err != nil {
@@ -140,6 +142,10 @@ func (s *Server) Start(port int) error {
 	http.HandleFunc("/api/changedir", s.handleChangeDir)
 
 	addr := fmt.Sprintf(":%d", port)
+	if httpsCertFile != "" {
+		log.Printf("🌐 Web UI available at https://localhost%s\n", addr)
+		return http.ListenAndServeTLS(addr, httpsCertFile, httpsCertFile, nil)
+	}
 	log.Printf("🌐 Web UI available at http://localhost%s\n", addr)
 	return http.ListenAndServe(addr, nil)
 }

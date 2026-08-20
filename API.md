@@ -2,7 +2,7 @@
 
 This document describes the Web UI REST API exposed by **local-agent** when running in interactive mode (`--interactive`).
 
-The server listens on `http://localhost:5050` by default.
+The server listens on `http://localhost:5050` by default (use `--ui-port <port>` to change it). Pass `--https <cert.pem>` (a PEM file containing both the certificate and private key) to serve it over `https://localhost:<port>` instead — in that case, use `curl -k` or `--cacert` for the examples below if the certificate is self-signed.
 
 ---
 
