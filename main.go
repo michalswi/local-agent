@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,31 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// warnIfInsecureOllamaURL flags plain HTTP to a non-loopback host, since prompts,
+// findings, and answers would then cross the network readable and alterable by
+// anyone on path (MITM). Use https:// (e.g. via a TLS-terminating reverse proxy
+// combined with OLLAMA_CA_CERT for a private CA) or an encrypted tunnel instead.
+func warnIfInsecureOllamaURL(rawURL string) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "http" {
+		return
+	}
+	switch parsed.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return
+	}
+	fmt.Printf("⚠️  Warning: Ollama endpoint (%s) uses plain HTTP to a non-loopback host; traffic to Ollama is unencrypted and readable/alterable by a network attacker. Use https:// (optionally with OLLAMA_CA_CERT for a private CA) or an encrypted tunnel.\n", rawURL)
+}
+
+// warnIfInsecureOllamaTLS flags disabled certificate validation: it lets any
+// on-path attacker impersonate the Ollama endpoint undetected, for testing only.
+func warnIfInsecureOllamaTLS(insecureSkipVerify bool) {
+	if !insecureSkipVerify {
+		return
+	}
+	fmt.Println("⚠️  Warning: OLLAMA_INSECURE_SKIP_VERIFY is enabled; TLS certificate validation for Ollama is disabled, so a network attacker can impersonate the endpoint undetected. OLLAMA_CA_CERT is ignored while this is set. Use only for local testing; prefer fixing the certificate (e.g. add a SAN) or OLLAMA_CA_CERT otherwise.")
+}
 
 func main() {
 	// Define CLI flags
@@ -80,7 +106,9 @@ func main() {
 	}
 
 	// Initialize LLM client
-	llmClient := llm.NewOllamaClient(cfg.LLM.Endpoint, cfg.LLM.Model, cfg.LLM.Timeout)
+	llmClient := llm.NewOllamaClient(cfg.LLM.Endpoint, cfg.LLM.Model, cfg.LLM.Timeout, cfg.LLM.CACert, cfg.LLM.InsecureSkipVerify)
+	warnIfInsecureOllamaURL(cfg.LLM.Endpoint)
+	warnIfInsecureOllamaTLS(cfg.LLM.InsecureSkipVerify)
 
 	// Handle health check
 	if *checkHealth {

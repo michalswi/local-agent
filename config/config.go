@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -28,12 +29,14 @@ type AgentConfig struct {
 
 // LLMConfig contains LLM provider settings
 type LLMConfig struct {
-	Provider    string  `yaml:"provider" json:"provider"`
-	Endpoint    string  `yaml:"endpoint" json:"endpoint"`
-	Model       string  `yaml:"model" json:"model"`
-	APIKey      string  `yaml:"api_key,omitempty" json:"api_key,omitempty"`
-	Temperature float64 `yaml:"temperature" json:"temperature"`
-	Timeout     int     `yaml:"timeout" json:"timeout"` // seconds
+	Provider           string  `yaml:"provider" json:"provider"`
+	Endpoint           string  `yaml:"endpoint" json:"endpoint"`
+	Model              string  `yaml:"model" json:"model"`
+	APIKey             string  `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	Temperature        float64 `yaml:"temperature" json:"temperature"`
+	Timeout            int     `yaml:"timeout" json:"timeout"` // seconds
+	CACert             string  `yaml:"ca_cert,omitempty" json:"ca_cert,omitempty"`
+	InsecureSkipVerify bool    `yaml:"insecure_skip_verify" json:"insecure_skip_verify"`
 }
 
 // FilterConfig contains file filtering rules
@@ -78,6 +81,11 @@ func DefaultConfig() *Config {
 		}
 	}
 
+	endpoint := "http://localhost:11434"
+	if val := os.Getenv("OLLAMA_URL"); val != "" {
+		endpoint = val
+	}
+
 	return &Config{
 		Agent: AgentConfig{
 			MaxFileSizeBytes: 10 * 1024 * 1024, // 10MB
@@ -85,11 +93,13 @@ func DefaultConfig() *Config {
 			TokenLimit:       tokenLimit,
 		},
 		LLM: LLMConfig{
-			Provider:    "ollama",
-			Endpoint:    "http://localhost:11434",
-			Model:       "gemma4:e2b",
-			Temperature: 0.5,
-			Timeout:     300, // 5 minutes for large batches
+			Provider:           "ollama",
+			Endpoint:           endpoint,
+			Model:              "gemma4:e2b",
+			Temperature:        0.5,
+			Timeout:            300, // 5 minutes for large batches
+			CACert:             os.Getenv("OLLAMA_CA_CERT"),
+			InsecureSkipVerify: strings.EqualFold(os.Getenv("OLLAMA_INSECURE_SKIP_VERIFY"), "true"),
 		},
 		Filters: FilterConfig{
 			RespectGitignore: true,

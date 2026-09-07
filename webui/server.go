@@ -641,7 +641,7 @@ func (s *Server) handleCommand(input string) string {
 		oldModel := s.model
 		s.model = newModel
 		s.cfg.LLM.Model = newModel
-		s.llmClient = llm.NewOllamaClient(s.cfg.LLM.Endpoint, newModel, s.cfg.LLM.Timeout)
+		s.llmClient = llm.NewOllamaClient(s.cfg.LLM.Endpoint, newModel, s.cfg.LLM.Timeout, s.cfg.LLM.CACert, s.cfg.LLM.InsecureSkipVerify)
 		s.mu.Unlock()
 		return fmt.Sprintf("✅ Model switched: %s → %s\n\nYou can now continue asking questions.", oldModel, newModel)
 

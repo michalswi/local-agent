@@ -3,11 +3,15 @@ package llm
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -62,16 +66,49 @@ type OllamaClient struct {
 	timeout    time.Duration
 }
 
-// NewOllamaClient creates a new Ollama client
-func NewOllamaClient(endpoint, model string, timeout int) *OllamaClient {
+// NewOllamaClient creates a new Ollama client. caCertPath and insecureSkipVerify
+// configure TLS trust for HTTPS endpoints (e.g. behind a TLS-terminating proxy);
+// insecureSkipVerify takes precedence over caCertPath when both are set.
+func NewOllamaClient(endpoint, model string, timeout int, caCertPath string, insecureSkipVerify bool) *OllamaClient {
+	d := time.Duration(timeout) * time.Second
 	return &OllamaClient{
-		endpoint: endpoint,
-		model:    model,
-		httpClient: &http.Client{
-			Timeout: time.Duration(timeout) * time.Second,
-		},
-		timeout: time.Duration(timeout) * time.Second,
+		endpoint:   endpoint,
+		model:      model,
+		httpClient: newOllamaHTTPClient(d, caCertPath, insecureSkipVerify),
+		timeout:    d,
 	}
+}
+
+// newOllamaHTTPClient builds the HTTP client used for all requests to Ollama.
+// When insecureSkipVerify is true, TLS certificate validation is disabled
+// entirely. Otherwise, if caCertPath names a PEM file, its certificate is
+// trusted in addition to the system pool, so a self-signed cert on a
+// TLS-terminating reverse proxy works.
+func newOllamaHTTPClient(timeout time.Duration, caCertPath string, insecureSkipVerify bool) *http.Client {
+	if insecureSkipVerify {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		return &http.Client{Timeout: timeout, Transport: transport}
+	}
+	if strings.TrimSpace(caCertPath) == "" {
+		return &http.Client{Timeout: timeout}
+	}
+	pemData, err := os.ReadFile(caCertPath)
+	if err != nil {
+		log.Printf("[ollama] could not read OLLAMA_CA_CERT %q: %v", caCertPath, err)
+		return &http.Client{Timeout: timeout}
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pemData) {
+		log.Printf("[ollama] OLLAMA_CA_CERT %q contained no valid certificates", caCertPath)
+		return &http.Client{Timeout: timeout}
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{RootCAs: pool}
+	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
 // Chat sends a chat request to Ollama
@@ -137,7 +174,7 @@ func (c *OllamaClient) CheckAvailability() error {
 		return fmt.Errorf("failed to create availability request: %w", err)
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 5 * time.Second, Transport: c.httpClient.Transport}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to reach Ollama at %s: %w", c.endpoint, err)

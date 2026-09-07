@@ -20,7 +20,7 @@
 - 🔒 Optional HTTPS for the Web UI via `--https <cert.pem>`
 - ⚡ Concurrent batch processing for large projects
 - 🔒 Privacy-first - all processing happens locally
-- 🌐 Remote Ollama support via `--host` flag (e.g., `--host 192.168.1.100:11434`)
+- 🌐 Remote Ollama support via `--host` flag (e.g., `--host 192.168.1.100:11434`) or `OLLAMA_URL` (e.g., `OLLAMA_URL=https://ollama.example.com`), with `OLLAMA_CA_CERT`/`OLLAMA_INSECURE_SKIP_VERIFY` for HTTPS endpoints
 - 📦 Standalone binary with embedded assets - no external dependencies
 - 📊 PCAP file analysis - parse and analyze network traffic captures (.pcap, .pcapng, .cap)
 - 📄 PDF file analysis - extract and analyze text from PDF files up to 10MB (requires `AGENT_TOKEN_LIMIT >= 8000`)
@@ -104,8 +104,18 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 
 **Dir button:** In Web UI, click **Dir** (next to Stop) to change the working directory at runtime — overrides the `--dir` flag. The directory is rescanned immediately and the file count updates in the header.
 
+**Clear button:** In Web UI, click **Clear** (next to Dir) to delete all visible chat messages, after a confirmation prompt.
+
 
 ## 🔧 Ollama Setup
+
+Connect to a remote or HTTPS-secured Ollama instance via environment variables (as an alternative to `--host`):
+
+| Variable | Description |
+|---|---|
+| `OLLAMA_URL` | Full Ollama endpoint URL, e.g. `https://ollama.example.com` (default `http://localhost:11434`) |
+| `OLLAMA_CA_CERT` | Path to a PEM file with a CA certificate to trust, for self-signed/private-CA HTTPS endpoints |
+| `OLLAMA_INSECURE_SKIP_VERIFY` | Set to `true` to disable TLS certificate validation (testing only; takes precedence over `OLLAMA_CA_CERT`) |
 
 ```bash
 # Install & start

@@ -25,7 +25,11 @@ Returns the current agent status.
   "directory": "/path/to/project",
   "model": "wizardlm2:7b",
   "totalFiles": 42,
-  "focusedPath": "main.go"
+  "focusedPath": "main.go",
+  "sessionPrompt": "",
+  "hasSessionPrompt": false,
+  "isThinking": false,
+  "isProcessing": false
 }
 ```
 
@@ -35,6 +39,11 @@ Returns the current agent status.
 | `model` | string | Active LLM model |
 | `totalFiles` | number | Number of scanned files |
 | `focusedPath` | string | Currently focused file (omitted when not set) |
+| `sessionPrompt` | string | Active per-session prompt instructions (omitted when not set) |
+| `hasSessionPrompt` | boolean | Whether a session prompt is currently applied |
+| `isThinking` | boolean | Whether the active model is a thinking/reasoning model (Qwen3.5/Gemma4) |
+| `isProcessing` | boolean | Whether an analysis run is currently in progress |
+| `progress` | object | Live per-file progress snapshot, present only while `isProcessing` is true (`active`, `done`, `statusText`, `runStartMs`) |
 
 ---
 
@@ -167,6 +176,84 @@ Sets or clears the focused file. When a focus is active, only that file is inclu
 
 ---
 
+### `POST /api/session-prompt`
+
+Sets or clears the per-session prompt: extra instructions appended to every request for the remainder of the interactive session. Not persisted after the session ends.
+
+**Request**
+
+```json
+{
+  "prompt": "Always answer in bullet points."
+}
+```
+
+Send `{"prompt": ""}` to clear it.
+
+**Response**
+
+```json
+{
+  "success": true,
+  "sessionPrompt": "Always answer in bullet points.",
+  "hasSessionPrompt": true
+}
+```
+
+---
+
+### `POST /api/stop`
+
+Cancels the currently in-flight analysis run, if any.
+
+**Request body:** none
+
+**Response (success)**
+
+```json
+{
+  "success": true
+}
+```
+
+**Response (no active run)**
+
+```json
+{
+  "success": false,
+  "error": "No active analysis to stop"
+}
+```
+
+---
+
+### `POST /api/changedir`
+
+Changes the working directory at runtime, overriding `--dir`. Triggers an immediate rescan and clears any active file focus.
+
+**Request**
+
+```json
+{
+  "path": "/path/to/other-project"
+}
+```
+
+**Response**
+
+```json
+{
+  "success": true,
+  "message": {
+    "role": "assistant",
+    "content": "📂 Directory changed to: /path/to/other-project\n\nFiles found: 42\nFiltered: 5",
+    "timestamp": "2026-04-30T10:00:06Z"
+  }
+}
+```
+
+---
+
 ### `GET /api/progress`
 
 Server-Sent Events (SSE) stream that emits progress messages during LLM analysis.
@@ -206,6 +293,8 @@ Flags:
   --host <host:port>    Ollama instance address (default: localhost:11434)
   --config <path>       Path to configuration file
   --interactive         Start interactive mode (terminal UI + web UI)
+  --ui-port <port>      Web UI port for interactive mode (default: 5050)
+  --https <cert.pem>    Serve the Web UI over HTTPS (PEM with cert + key)
   --dry-run             List matched files without running analysis
   --no-detect-secrets   Disable secret/sensitive content detection
   --health              Check LLM connectivity
@@ -219,6 +308,9 @@ Flags:
 |---|---|---|
 | `AGENT_TOKEN_LIMIT` | `4000` | Max tokens per LLM request |
 | `AGENT_CONCURRENT_FILES` | `1` | Number of files analyzed in parallel |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint (overridden by `--host` if set) |
+| `OLLAMA_CA_CERT` | unset | PEM CA certificate to trust for a self-signed/private-CA HTTPS Ollama endpoint |
+| `OLLAMA_INSECURE_SKIP_VERIFY` | `false` | Disable TLS certificate validation for the Ollama connection (testing only) |
 
 ---
 
@@ -258,4 +350,17 @@ curl http://localhost:5050/api/messages | jq .
 
 # Stream progress events during an active analysis
 curl -N http://localhost:5050/api/progress
+
+# Set a session prompt
+curl -s -X POST http://localhost:5050/api/session-prompt \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Always answer in bullet points."}' | jq .
+
+# Stop an in-flight analysis
+curl -s -X POST http://localhost:5050/api/stop | jq .
+
+# Change the working directory
+curl -s -X POST http://localhost:5050/api/changedir \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/path/to/other-project"}' | jq .
 ```
