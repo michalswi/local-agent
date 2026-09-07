@@ -7,11 +7,13 @@ agent:
 
 llm:
   provider: "ollama"                      # LLM provider (ollama, openai, anthropic)
-  endpoint: "http://localhost:11434"     # LLM API endpoint
+  endpoint: "http://localhost:11434"     # LLM API endpoint (env: OLLAMA_URL)
   model: "codellama"                     # model to use for analysis
   temperature: 0.1                       # lower = more deterministic
   timeout: 120                           # request timeout in seconds
   # api_key: ""                          # optional API key for cloud providers
+  # ca_cert: ""                          # PEM file to trust for HTTPS endpoints (env: OLLAMA_CA_CERT)
+  insecure_skip_verify: false             # disable TLS cert validation - testing only (env: OLLAMA_INSECURE_SKIP_VERIFY)
 
 filters:
   respect_gitignore: true                # honor .gitignore patterns

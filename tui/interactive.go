@@ -539,7 +539,7 @@ File breakdown:`,
 				oldModel := m.model
 				m.model = newModel
 				m.cfg.LLM.Model = newModel
-				m.llmClient = llm.NewOllamaClient(m.cfg.LLM.Endpoint, newModel, m.cfg.LLM.Timeout)
+				m.llmClient = llm.NewOllamaClient(m.cfg.LLM.Endpoint, newModel, m.cfg.LLM.Timeout, m.cfg.LLM.CACert, m.cfg.LLM.InsecureSkipVerify)
 				m.messages = append(m.messages, Message{
 					Role:      "assistant",
 					Content:   fmt.Sprintf("✅ Model switched: %s → %s\n\nYou can now continue asking questions.", oldModel, newModel),
