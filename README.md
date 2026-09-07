@@ -104,6 +104,8 @@ AGENT_CONCURRENT_FILES=5 ./local-agent --dir (...) --interactive
 
 **Dir button:** In Web UI, click **Dir** (next to Stop) to change the working directory at runtime — overrides the `--dir` flag. The directory is rescanned immediately and the file count updates in the header.
 
+**Clear button:** In Web UI, click **Clear** (next to Dir) to delete all visible chat messages, after a confirmation prompt.
+
 
 ## 🔧 Ollama Setup
 

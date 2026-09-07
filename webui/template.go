@@ -364,6 +364,22 @@ const htmlTemplate = `<!DOCTYPE html>
         #dirButton:hover:not(:disabled) { background: var(--border-color); transform: scale(1.03); }
         #dirButton:disabled { cursor: not-allowed; opacity: 0.45; }
 
+        #clearButton {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 22px;
+            padding: 0.6rem 1.1rem;
+            font-size: 0.92rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.18s, transform 0.12s;
+            white-space: nowrap;
+        }
+
+        #clearButton:hover:not(:disabled) { background: var(--border-color); transform: scale(1.03); }
+        #clearButton:disabled { cursor: not-allowed; opacity: 0.45; }
+
         /* ── Change-dir modal ────────────────────────────────── */
         .modal-overlay {
             display: none;
@@ -742,6 +758,7 @@ const htmlTemplate = `<!DOCTYPE html>
             <button id="sendButton">Send</button>
             <button id="stopButton" disabled>Stop</button>
             <button id="dirButton" title="Change working directory">Dir</button>
+            <button id="clearButton" title="Clear conversation">Clear</button>
         </div>
         <div class="commands-hint">
             type <code>help</code> for commands
@@ -765,6 +782,7 @@ const htmlTemplate = `<!DOCTYPE html>
         const sendButton = document.getElementById('sendButton');
         const stopButton = document.getElementById('stopButton');
         const dirButton = document.getElementById('dirButton');
+        const clearButton = document.getElementById('clearButton');
         const dirModal = document.getElementById('dirModal');
         const dirInput = document.getElementById('dirInput');
         const dirModalCancel = document.getElementById('dirModalCancel');
@@ -1641,6 +1659,7 @@ const htmlTemplate = `<!DOCTYPE html>
             stopButton.disabled = false;
             messageInput.disabled = true;
             dirButton.disabled = true;
+            clearButton.disabled = true;
             _activeFiles.clear();
             _doneFiles.clear();
             _renderActiveList();
@@ -1727,10 +1746,35 @@ const htmlTemplate = `<!DOCTYPE html>
                 stopButton.textContent = 'Stop';
                 messageInput.disabled = false;
                 dirButton.disabled = false;
+                clearButton.disabled = false;
                 messageInput.focus();
                 _activeFiles.clear();
                 _doneFiles.clear();
                 _renderActiveList();
+            }
+        }
+
+        async function clearChat() {
+            if (isProcessing || clearButton.disabled) return;
+            if (!confirm('Clear the conversation? This cannot be undone.')) return;
+
+            clearButton.disabled = true;
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: 'clear' }),
+                });
+                const data = await response.json();
+                if (data.success) {
+                    await loadMessages();
+                } else {
+                    addMessage('assistant', '❌ Error: ' + (data.error || 'Unknown error'), new Date().toISOString());
+                }
+            } catch (error) {
+                addMessage('assistant', '❌ Network error: ' + error.message, new Date().toISOString());
+            } finally {
+                clearButton.disabled = false;
             }
         }
 
@@ -1859,6 +1903,8 @@ const htmlTemplate = `<!DOCTYPE html>
         if (sessionPromptApplyButton) {
             sessionPromptApplyButton.addEventListener('click', applySessionPrompt);
         }
+        clearButton.addEventListener('click', clearChat);
+
         if (sessionPromptClearButton) {
             sessionPromptClearButton.addEventListener('click', clearSessionPrompt);
         }
