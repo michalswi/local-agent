@@ -1,10 +1,12 @@
 package analyzer
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"local-agent/config"
 	"local-agent/llm"
@@ -297,6 +299,79 @@ func (a *Analyzer) PrepareForLLM(files []*types.FileInfo, maxTokens int) string 
 	}
 
 	return builder.String()
+}
+
+// NeedsChunkedAnalysis reports whether a file should be analyzed chunk-by-chunk
+// instead of sending its full extracted content in a single request. This avoids
+// oversized requests that upstream proxies/gateways may reject or time out.
+func NeedsChunkedAnalysis(file *types.FileInfo) bool {
+	return file != nil && file.Category == types.CategoryLarge && len(file.Chunks) > 1
+}
+
+// AnalyzeLargeFile analyzes a large file's chunks individually (rather than sending
+// the full extracted content in one request) and combines the per-chunk answers into
+// a single response.
+func (a *Analyzer) AnalyzeLargeFile(ctx context.Context, client *llm.OllamaClient, file *types.FileInfo, task string, temperature float64) (*types.AnalysisResponse, error) {
+	if file == nil || len(file.Chunks) == 0 {
+		return nil, fmt.Errorf("file has no chunks to analyze")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	sanitize := func(text string) string {
+		if a.validator == nil {
+			return text
+		}
+		return a.validator.SanitizeContent(text)
+	}
+
+	isThinking := llm.IsThinkingModel(client.GetModel())
+	total := len(file.Chunks)
+
+	var chunkAnswers []string
+	var thinkingParts []string
+	var totalTokens int
+	var totalDuration time.Duration
+	model := ""
+
+	for _, chunk := range file.Chunks {
+		content := fmt.Sprintf("File: %s (Part %d/%d, Lines %d-%d)\n\n```%s\n%s\n```",
+			file.RelPath, chunk.Index+1, total, chunk.StartLine, chunk.EndLine,
+			getLanguageIdentifier(file.Extension), sanitize(chunk.Content))
+
+		chunkTask := fmt.Sprintf("Analyze part %d/%d of the file '%s'. %s", chunk.Index+1, total, file.RelPath, task)
+
+		var resp *types.AnalysisResponse
+		var err error
+		if isThinking {
+			resp, err = client.AnalyzeThinkingWithContext(ctx, chunkTask, content, temperature)
+		} else {
+			resp, err = client.AnalyzeWithContext(ctx, chunkTask, content, temperature)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("part %d/%d failed: %w", chunk.Index+1, total, err)
+		}
+
+		chunkAnswers = append(chunkAnswers, fmt.Sprintf("**Part %d/%d (lines %d-%d):**\n%s",
+			chunk.Index+1, total, chunk.StartLine, chunk.EndLine, strings.TrimSpace(resp.Response)))
+		if resp.ThinkingContent != "" {
+			thinkingParts = append(thinkingParts, resp.ThinkingContent)
+		}
+		totalTokens += resp.TokensUsed
+		totalDuration += resp.Duration
+		if model == "" {
+			model = resp.Model
+		}
+	}
+
+	return &types.AnalysisResponse{
+		Response:        strings.Join(chunkAnswers, "\n\n"),
+		ThinkingContent: strings.Join(thinkingParts, "\n\n"),
+		Model:           model,
+		TokensUsed:      totalTokens,
+		Duration:        totalDuration,
+	}, nil
 }
 
 func (a *Analyzer) flagViolations(info *types.FileInfo, content string) {

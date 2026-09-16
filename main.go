@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/url"
@@ -341,7 +342,7 @@ func scanDirectory(rootPath string, cfg *config.Config) (*types.ScanResult, erro
 
 func analyzeFiles(scanResult *types.ScanResult, focusRel string, task string, cfg *config.Config, llmClient *llm.OllamaClient) (*types.AnalysisResponse, error) {
 	// Prepare files for LLM
-	analyzer := analyzer.NewAnalyzer(cfg)
+	analyzerEngine := analyzer.NewAnalyzer(cfg)
 
 	fileInfoPtrs, err := selectFilesForAnalysis(scanResult, focusRel)
 	if err != nil {
@@ -349,10 +350,10 @@ func analyzeFiles(scanResult *types.ScanResult, focusRel string, task string, cf
 	}
 
 	// Always process files individually (one request per file)
-	return analyzeBatches(fileInfoPtrs, task, cfg, llmClient, analyzer)
+	return analyzeBatches(fileInfoPtrs, task, cfg, llmClient, analyzerEngine)
 }
 
-func analyzeBatches(files []*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzer *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+func analyzeBatches(files []*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzerEngine *analyzer.Analyzer) (*types.AnalysisResponse, error) {
 	fmt.Printf("\n📦 Processing files individually (one request per file)\n")
 
 	// Prepare batches (one file per batch)
@@ -376,13 +377,13 @@ func analyzeBatches(files []*types.FileInfo, task string, cfg *config.Config, ll
 
 	// If only 1 worker or 1 file, process sequentially
 	if maxConcurrent == 1 || totalBatches == 1 {
-		return processSequentially(batches, task, cfg, llmClient, analyzer)
+		return processSequentially(batches, task, cfg, llmClient, analyzerEngine)
 	}
 
 	fmt.Printf("   Using %d concurrent workers\n", maxConcurrent)
 
 	// Process batches concurrently
-	return processConcurrently(batches, task, cfg, llmClient, analyzer, maxConcurrent)
+	return processConcurrently(batches, task, cfg, llmClient, analyzerEngine, maxConcurrent)
 }
 
 // prepareBatches creates one batch per file for individual processing
@@ -395,8 +396,8 @@ func prepareBatches(files []*types.FileInfo, tokenLimit int) [][]*types.FileInfo
 			continue
 		}
 
-		// Skip files that exceed token limit
-		if file.TokenCount > tokenLimit {
+		// Skip files that exceed token limit, unless they can be analyzed chunk-by-chunk
+		if file.TokenCount > tokenLimit && !analyzer.NeedsChunkedAnalysis(file) {
 			fmt.Printf("   ⚠️  Skipping %s (%d tokens exceeds limit of %d)\n",
 				file.RelPath, file.TokenCount, tokenLimit)
 			continue
@@ -410,7 +411,7 @@ func prepareBatches(files []*types.FileInfo, tokenLimit int) [][]*types.FileInfo
 }
 
 // processSequentially processes files one at a time
-func processSequentially(batches [][]*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzer *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+func processSequentially(batches [][]*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzerEngine *analyzer.Analyzer) (*types.AnalysisResponse, error) {
 	var allResponses []string
 	var totalTokens int
 	var totalDuration time.Duration
@@ -421,7 +422,7 @@ func processSequentially(batches [][]*types.FileInfo, task string, cfg *config.C
 		fileName := batch[0].RelPath // Each batch has one file
 		fmt.Printf("   Processing file %d/%d: %s\n", fileNum, len(batches), fileName)
 
-		response, err := processBatch(batch, task, cfg, llmClient, analyzer)
+		response, err := processBatch(batch, task, cfg, llmClient, analyzerEngine)
 		if err != nil {
 			fmt.Printf("   ⚠️  File %d (%s) failed: %v\n", fileNum, fileName, err)
 			allResponses = append(allResponses, formatFileErrorSection(fileName, err))
@@ -458,7 +459,7 @@ type batchResult struct {
 }
 
 // processConcurrently processes batches concurrently using worker pool
-func processConcurrently(batches [][]*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzer *analyzer.Analyzer, maxWorkers int) (*types.AnalysisResponse, error) {
+func processConcurrently(batches [][]*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzerEngine *analyzer.Analyzer, maxWorkers int) (*types.AnalysisResponse, error) {
 	totalFiles := len(batches)
 
 	// Create channels
@@ -482,7 +483,7 @@ func processConcurrently(batches [][]*types.FileInfo, task string, cfg *config.C
 				fmt.Printf("   [Worker %d] Processing file %d/%d: %s\n",
 					workerID, job.batchNum, totalFiles, fileName)
 
-				response, err := processBatch(job.batch, task, cfg, llmClient, analyzer)
+				response, err := processBatch(job.batch, task, cfg, llmClient, analyzerEngine)
 				results <- batchResult{
 					batchNum: job.batchNum,
 					response: response,
@@ -563,7 +564,7 @@ func processConcurrently(batches [][]*types.FileInfo, task string, cfg *config.C
 	}, nil
 }
 
-func processBatch(batch []*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzer *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+func processBatch(batch []*types.FileInfo, task string, cfg *config.Config, llmClient *llm.OllamaClient, analyzerEngine *analyzer.Analyzer) (*types.AnalysisResponse, error) {
 	// Show file info being processed
 	for _, file := range batch {
 		if file != nil {
@@ -572,7 +573,14 @@ func processBatch(batch []*types.FileInfo, task string, cfg *config.Config, llmC
 		}
 	}
 
-	content := analyzer.PrepareForLLM(batch, cfg.Agent.TokenLimit)
+	// Large files with multiple chunks are analyzed chunk-by-chunk to avoid sending
+	// the entire extracted content (e.g. a long PDF) in a single oversized request.
+	if len(batch) == 1 && analyzer.NeedsChunkedAnalysis(batch[0]) {
+		fmt.Printf("   📄 %s is large (%d parts); analyzing chunk-by-chunk\n", batch[0].RelPath, len(batch[0].Chunks))
+		return analyzerEngine.AnalyzeLargeFile(context.Background(), llmClient, batch[0], task, cfg.LLM.Temperature)
+	}
+
+	content := analyzerEngine.PrepareForLLM(batch, cfg.Agent.TokenLimit)
 
 	// Check if we have any actual content to analyze
 	if len(content) < 100 { // Less than 100 bytes means essentially empty (just headers)

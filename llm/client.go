@@ -152,6 +152,13 @@ func (c *OllamaClient) ChatWithContext(ctx context.Context, request *ChatRequest
 	}
 	defer resp.Body.Close()
 
+	// Non-2xx responses (e.g. a gateway/proxy timeout or error page) are often
+	// plain text, not JSON; surface the body instead of a cryptic decode error.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("unexpected status %d from %s: %s", resp.StatusCode, url, strings.TrimSpace(string(body)))
+	}
+
 	// Parse response
 	var chatResp ChatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {

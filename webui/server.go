@@ -827,7 +827,7 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 	// Filter to readable files within token limit
 	var validFiles []*types.FileInfo
 	for _, f := range files {
-		if f != nil && f.IsReadable && len(f.Content) > 0 && f.TokenCount <= s.cfg.Agent.TokenLimit {
+		if f != nil && f.IsReadable && len(f.Content) > 0 && (f.TokenCount <= s.cfg.Agent.TokenLimit || analyzer.NeedsChunkedAnalysis(f)) {
 			validFiles = append(validFiles, f)
 		}
 	}
@@ -848,6 +848,16 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 	processFile := func(idx int, file *types.FileInfo) fileResult {
 		if err := ctx.Err(); err != nil {
 			return fileResult{idx: idx, name: file.RelPath, err: err}
+		}
+
+		// Large files with multiple chunks are analyzed chunk-by-chunk to avoid sending
+		// the entire extracted content (e.g. a long PDF) in a single oversized request.
+		if analyzer.NeedsChunkedAnalysis(file) {
+			resp, err := analyzerEngine.AnalyzeLargeFile(ctx, s.llmClient, file, effectiveQuestion, s.cfg.LLM.Temperature)
+			if err != nil {
+				return fileResult{idx: idx, name: file.RelPath, err: err}
+			}
+			return fileResult{idx: idx, name: file.RelPath, response: resp.Response, thinking: resp.ThinkingContent, tokens: resp.TokensUsed}
 		}
 
 		content := analyzerEngine.PrepareForLLM([]*types.FileInfo{file}, s.cfg.Agent.TokenLimit)
