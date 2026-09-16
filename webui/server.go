@@ -306,14 +306,25 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
+			content := "⏹️ Analysis stopped."
+			var reviewSummary string
+			if analysisResp != nil && strings.TrimSpace(analysisResp.Response) != "" {
+				reviewSummary = s.buildReviewSummary(analysisResp)
+				content = fmt.Sprintf("⏹️ Analysis stopped early — showing results for the files completed so far.\n%s", analysisResp.Response)
+			}
 			msg := Message{
-				Role:      "assistant",
-				Content:   "⏹️ Analysis stopped.",
-				Timestamp: time.Now(),
+				Role:          "assistant",
+				Content:       content,
+				Timestamp:     time.Now(),
+				ReviewSummary: reviewSummary,
 			}
 			s.mu.Lock()
 			s.messages = append(s.messages, msg)
 			s.mu.Unlock()
+
+			if analysisResp != nil && strings.TrimSpace(analysisResp.Response) != "" {
+				s.saveSession(userInput, analysisResp)
+			}
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(ChatResponse{
@@ -888,13 +899,14 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 	if maxConcurrent == 1 || len(validFiles) == 1 {
 		for i, file := range validFiles {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				break
 			}
 			fileStartTimes[file.RelPath] = time.Now()
 			sendThinking(file.RelPath)
 			results[i] = processFile(i, file)
 			if errors.Is(results[i].err, context.Canceled) {
-				return nil, context.Canceled
+				results[i] = fileResult{}
+				break
 			}
 			for _, line := range strings.Split(results[i].thinking, "\n") {
 				if strings.TrimSpace(line) != "" {
@@ -952,7 +964,8 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 		completed := 0
 		for r := range resCh {
 			if errors.Is(r.err, context.Canceled) {
-				return nil, context.Canceled
+				// Job was picked up after the run was stopped; never actually analyzed.
+				continue
 			}
 			completed++
 			sendProgress(completed, len(validFiles), validFiles[r.idx].RelPath)
@@ -960,15 +973,16 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 		}
 	}
 
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	// Aggregate results in order
+	// Aggregate whatever files completed, even if the run was stopped partway through,
+	// so completed analysis is never silently discarded.
 	var sb strings.Builder
 	fileTokens := make(map[string]int)
 	totalTokens := 0
 	for _, r := range results {
+		if r.name == "" {
+			// Zero-value slot: never attempted (run stopped before reaching this file).
+			continue
+		}
 		if r.err != nil {
 			sb.WriteString(fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v\n", r.name, r.err))
 		} else {
@@ -982,13 +996,21 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 		}
 	}
 
-	return &types.AnalysisResponse{
+	resp := &types.AnalysisResponse{
 		Response:   strings.TrimSpace(sb.String()),
 		Model:      s.cfg.LLM.Model,
 		TokensUsed: totalTokens,
 		FileTokens: fileTokens,
 		Duration:   time.Since(start),
-	}, nil
+	}
+
+	// If the run was stopped, still return whatever was completed alongside
+	// context.Canceled so the caller can display partial results instead of nothing.
+	if err := ctx.Err(); err != nil {
+		return resp, context.Canceled
+	}
+
+	return resp, nil
 }
 
 func (s *Server) buildQuestionWithSessionPrompt(question string) string {
