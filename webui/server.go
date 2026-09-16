@@ -306,14 +306,25 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
+			content := "⏹️ Analysis stopped."
+			var reviewSummary string
+			if analysisResp != nil && strings.TrimSpace(analysisResp.Response) != "" {
+				reviewSummary = s.buildReviewSummary(analysisResp)
+				content = fmt.Sprintf("⏹️ Analysis stopped early — showing results for the files completed so far.\n%s", analysisResp.Response)
+			}
 			msg := Message{
-				Role:      "assistant",
-				Content:   "⏹️ Analysis stopped.",
-				Timestamp: time.Now(),
+				Role:          "assistant",
+				Content:       content,
+				Timestamp:     time.Now(),
+				ReviewSummary: reviewSummary,
 			}
 			s.mu.Lock()
 			s.messages = append(s.messages, msg)
 			s.mu.Unlock()
+
+			if analysisResp != nil && strings.TrimSpace(analysisResp.Response) != "" {
+				s.saveSession(userInput, analysisResp)
+			}
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(ChatResponse{
@@ -827,7 +838,7 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 	// Filter to readable files within token limit
 	var validFiles []*types.FileInfo
 	for _, f := range files {
-		if f != nil && f.IsReadable && len(f.Content) > 0 && f.TokenCount <= s.cfg.Agent.TokenLimit {
+		if f != nil && f.IsReadable && len(f.Content) > 0 && (f.TokenCount <= s.cfg.Agent.TokenLimit || analyzer.NeedsChunkedAnalysis(f)) {
 			validFiles = append(validFiles, f)
 		}
 	}
@@ -848,6 +859,16 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 	processFile := func(idx int, file *types.FileInfo) fileResult {
 		if err := ctx.Err(); err != nil {
 			return fileResult{idx: idx, name: file.RelPath, err: err}
+		}
+
+		// Large files with multiple chunks are analyzed chunk-by-chunk to avoid sending
+		// the entire extracted content (e.g. a long PDF) in a single oversized request.
+		if analyzer.NeedsChunkedAnalysis(file) {
+			resp, err := analyzerEngine.AnalyzeLargeFile(ctx, s.llmClient, file, effectiveQuestion, s.cfg.LLM.Temperature)
+			if err != nil {
+				return fileResult{idx: idx, name: file.RelPath, err: err}
+			}
+			return fileResult{idx: idx, name: file.RelPath, response: resp.Response, thinking: resp.ThinkingContent, tokens: resp.TokensUsed}
 		}
 
 		content := analyzerEngine.PrepareForLLM([]*types.FileInfo{file}, s.cfg.Agent.TokenLimit)
@@ -878,13 +899,14 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 	if maxConcurrent == 1 || len(validFiles) == 1 {
 		for i, file := range validFiles {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				break
 			}
 			fileStartTimes[file.RelPath] = time.Now()
 			sendThinking(file.RelPath)
 			results[i] = processFile(i, file)
 			if errors.Is(results[i].err, context.Canceled) {
-				return nil, context.Canceled
+				results[i] = fileResult{}
+				break
 			}
 			for _, line := range strings.Split(results[i].thinking, "\n") {
 				if strings.TrimSpace(line) != "" {
@@ -942,7 +964,8 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 		completed := 0
 		for r := range resCh {
 			if errors.Is(r.err, context.Canceled) {
-				return nil, context.Canceled
+				// Job was picked up after the run was stopped; never actually analyzed.
+				continue
 			}
 			completed++
 			sendProgress(completed, len(validFiles), validFiles[r.idx].RelPath)
@@ -950,15 +973,16 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 		}
 	}
 
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	// Aggregate results in order
+	// Aggregate whatever files completed, even if the run was stopped partway through,
+	// so completed analysis is never silently discarded.
 	var sb strings.Builder
 	fileTokens := make(map[string]int)
 	totalTokens := 0
 	for _, r := range results {
+		if r.name == "" {
+			// Zero-value slot: never attempted (run stopped before reaching this file).
+			continue
+		}
 		if r.err != nil {
 			sb.WriteString(fmt.Sprintf("\n=== %s ===\n⚠️  FAILED: %v\n", r.name, r.err))
 		} else {
@@ -972,13 +996,21 @@ func (s *Server) processQuestion(ctx context.Context, question string, files []*
 		}
 	}
 
-	return &types.AnalysisResponse{
+	resp := &types.AnalysisResponse{
 		Response:   strings.TrimSpace(sb.String()),
 		Model:      s.cfg.LLM.Model,
 		TokensUsed: totalTokens,
 		FileTokens: fileTokens,
 		Duration:   time.Since(start),
-	}, nil
+	}
+
+	// If the run was stopped, still return whatever was completed alongside
+	// context.Canceled so the caller can display partial results instead of nothing.
+	if err := ctx.Err(); err != nil {
+		return resp, context.Canceled
+	}
+
+	return resp, nil
 }
 
 func (s *Server) buildQuestionWithSessionPrompt(question string) string {

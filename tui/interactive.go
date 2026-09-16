@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -876,8 +877,8 @@ func (m InteractiveModel) prepareBatchesForInteractive(files []*types.FileInfo, 
 			continue
 		}
 
-		// Skip files that exceed token limit
-		if file.TokenCount > tokenLimit {
+		// Skip files that exceed token limit, unless they can be analyzed chunk-by-chunk
+		if file.TokenCount > tokenLimit && !analyzer.NeedsChunkedAnalysis(file) {
 			info.WriteString(fmt.Sprintf("   ⚠️  Skipping %s (%d tokens exceeds limit of %d)\n",
 				file.RelPath, file.TokenCount, tokenLimit))
 			continue
@@ -1040,6 +1041,12 @@ func (m InteractiveModel) processConcurrentlyForInteractive(batches [][]*types.F
 }
 
 func (m InteractiveModel) processBatchForInteractive(batch []*types.FileInfo, question string, analyzerEngine *analyzer.Analyzer) (*types.AnalysisResponse, error) {
+	// Large files with multiple chunks are analyzed chunk-by-chunk to avoid sending
+	// the entire extracted content (e.g. a long PDF) in a single oversized request.
+	if len(batch) == 1 && analyzer.NeedsChunkedAnalysis(batch[0]) {
+		return analyzerEngine.AnalyzeLargeFile(context.Background(), m.llmClient, batch[0], question, m.cfg.LLM.Temperature)
+	}
+
 	content := analyzerEngine.PrepareForLLM(batch, m.cfg.Agent.TokenLimit)
 
 	// Check if we have any actual content to analyze

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -290,8 +291,8 @@ func (r *Runner) prepareBatches(files []*types.FileInfo) [][]*types.FileInfo {
 			continue
 		}
 
-		// Skip files that exceed token limit
-		if file.TokenCount > tokenLimit {
+		// Skip files that exceed token limit, unless they can be analyzed chunk-by-chunk
+		if file.TokenCount > tokenLimit && !analyzer.NeedsChunkedAnalysis(file) {
 			r.program.Send(SendAnalysisProgress(fmt.Sprintf("⚠️  Skipping %s (%d tokens exceeds limit of %d)",
 				file.RelPath, file.TokenCount, tokenLimit)))
 			continue
@@ -446,6 +447,13 @@ func (r *Runner) processBatch(batch []*types.FileInfo, analyzerEngine *analyzer.
 			r.program.Send(SendAnalysisProgress(fmt.Sprintf("[INFO] File: %s, Tokens: %d, Content length: %d bytes, IsReadable: %v",
 				file.RelPath, file.TokenCount, len(file.Content), file.IsReadable)))
 		}
+	}
+
+	// Large files with multiple chunks are analyzed chunk-by-chunk to avoid sending
+	// the entire extracted content (e.g. a long PDF) in a single oversized request.
+	if len(batch) == 1 && analyzer.NeedsChunkedAnalysis(batch[0]) {
+		r.program.Send(SendAnalysisProgress(fmt.Sprintf("📄 %s is large (%d parts); analyzing chunk-by-chunk", batch[0].RelPath, len(batch[0].Chunks))))
+		return analyzerEngine.AnalyzeLargeFile(context.Background(), r.client, batch[0], r.model.Task, r.cfg.LLM.Temperature)
 	}
 
 	content := analyzerEngine.PrepareForLLM(batch, r.cfg.Agent.TokenLimit)
